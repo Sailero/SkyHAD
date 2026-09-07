@@ -12,7 +12,9 @@
 - 根目录 `make_env.py` 和可安装的 `had_env` 包提供同一工厂，图形依赖按需安装。
 
 本机原研究目录 `E:\Code\Open_Score` 仍为旧研究 HEAD
-`45b627627323a7b567a7331f2f4dcf76e07c8dfc`；源码、配置和运行任务未修改。
+`45b627627323a7b567a7331f2f4dcf76e07c8dfc`；本次没有修改其中的源码、配置或运行任务。
+最终只读复核时，原目录还有 `.vscode/tasks.json`、实验记录和 `Open-SCORE/monitoring/` 的其他本地变更，
+本次未处理这些变更；它们不会被打包进入独立环境。
 独立环境位于 `E:\Code\Open_Score_HAD_Workbench`，目录没有再次改名。
 
 拆分前完整历史保存在本机
@@ -46,6 +48,14 @@ Qt 离屏模式运行真实控件、事件循环和 spawn 工作进程，验证�
 
 完整测试 XML 和机器可读安装验收保存在本机 `outputs/validation/`；输出不进入精简 Git 仓库。
 源码包与 wheel 的来源标识都扫描实际安装文件；wheel 不把外层其他项目的 Git HEAD 当作本包提交。
+
+已将约 114 KiB 的 wheel 安装到单独目录，用 Python `-I` 从另一个工作目录运行：
+公共环境、完整记录、精确分支、PNG/SVG/PDF/MP4、Pygame RGB 和 Qt 窗口均通过。
+实际导入路径来自 wheel；源码指纹与工作区逐文件一致，默认输出位于调用目录而不是 site-packages。
+这验证了环境能够被其他项目调用，不依赖当前仓库恰好位于 Python 搜索路径上。
+
+验证依赖为 NumPy 1.26.4、SciPy 1.15.3、Gymnasium 1.3.0、PettingZoo 1.27.0、
+Pygame 2.6.1、PySide6 6.11.2、Matplotlib 3.10.9。
 
 ## 可复验命令
 
