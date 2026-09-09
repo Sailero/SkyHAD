@@ -193,7 +193,7 @@ class WorkbenchWindow(QMainWindow):
         layout.addWidget(self.filter_text)
         filters = QHBoxLayout()
         self.outcome_filter = QComboBox()
-        self.outcome_filter.addItems(["全部结果", "红方胜", "蓝方胜", "未决 / 平局", "采样截断"])
+        self.outcome_filter.addItems(["全部结果", "红方胜", "蓝方胜", "未决 / 平局", "采样截断", "累计伤害"])
         self.outcome_filter.currentIndexChanged.connect(self._filter_library)
         filters.addWidget(self.outcome_filter)
         self.size_filter = QComboBox()
@@ -699,6 +699,8 @@ class WorkbenchWindow(QMainWindow):
 
     @staticmethod
     def _outcome(episode):
+        if episode.metadata.get("task_mode", episode.metadata.get("scenario", {}).get("task_mode")) == "damage":
+            return 5
         if episode.metadata.get("truncated") or episode.metadata.get("termination_reason") == "sampling_horizon":
             return 4
         result = episode.metadata.get("outcome_red")
@@ -716,7 +718,11 @@ class WorkbenchWindow(QMainWindow):
     def _episode_caption(self, name, episode):
         m = episode.metadata
         p = m.get("policies", {}) or {}
-        outcome = ["", "红方胜", "蓝方胜", "未决 / 平局", "采样截断"][self._outcome(episode)]
+        category = self._outcome(episode)
+        outcome = ["", "红方胜", "蓝方胜", "未决 / 平局", "采样截断", "累计伤害"][category]
+        if category == 5:
+            total = float(m.get("target_damage", episode.frames[-1].get("target_damage", 0.) if episode.frames else 0.))
+            outcome = f"累计伤害 {total:.3f} · 红方回报 {-total:.3f} · 蓝方回报 {total:.3f}"
         reason = m.get("termination_reason", "未记录")
         return f"{name}\n{p.get('red', '?')} × {p.get('blue', '?')} · {self._episode_size(episode)}\n{outcome} · {EVENT_NAMES.get(reason, reason)}"
 

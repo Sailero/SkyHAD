@@ -6,10 +6,13 @@ from had_env.core.env.env import Env
 class HADEnv(Env):
     def __init__(self, red_attack_n, blue_attack_n, target_n,
                  red_scout_n=0, red_disturb_n=0, blue_scout_n=0, blue_disturb_n=0,
-                 task_type='Training', target_region=None, seed=None):
+                 task_type='Training', target_region=None, seed=None,
+                 task_mode='survival', target_health=None, spatial_dim=2, plane_altitude=None, **kwargs):
         super(HADEnv, self).__init__(red_scout_n, red_disturb_n, red_attack_n,
                                   blue_scout_n, blue_disturb_n, blue_attack_n,
-                                  target_n, target_region=target_region, seed=seed)
+                                  target_n, target_region=target_region, seed=seed,
+                                  task_mode=task_mode, target_health=target_health,
+                                  spatial_dim=spatial_dim, plane_altitude=plane_altitude, **kwargs)
 
         self.task_type = task_type
 

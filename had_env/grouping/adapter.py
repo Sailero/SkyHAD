@@ -59,6 +59,15 @@ class HADStage3Snapshot:
     adapter_rng_state: Mapping[str, object]
     numpy_random_state: Tuple[object, ...]
     last_events: Tuple[HADStage3Event, ...]
+    task_mode: str
+    target_health: float
+    physics_protocol: str
+    max_steps: int
+    horizon_policy: str
+    last_physics_events: Tuple[Mapping[str, object], ...]
+    spatial_dim: int
+    plane_altitude: float
+    target_initialization: str
 
 
 class HADStage3Adapter:
@@ -91,16 +100,18 @@ class HADStage3Adapter:
         blue_attackers: int,
         targets: int,
         *,
-        max_steps: int = 50,
-        target_region: Sequence[Sequence[float]] = (
-            (-2300.0, -1900.0),
-            (-1200.0, 1200.0),
-            (50.0, 300.0),
-        ),
+        max_steps: int = 100,
+        target_region: Optional[Sequence[Sequence[float]]] = None,
         target_positions: Optional[Sequence[Sequence[float]]] = None,
+        target_initialization: str = "random",
         blue_rule_style: str = "rush",
         split_spacing: float = 180.0,
         task_type: str = "Training",
+        horizon_policy: str = "red_win",
+        task_mode: str = "survival",
+        target_health: Optional[float] = None,
+        spatial_dim: int = 2,
+        plane_altitude: Optional[float] = None,
     ) -> None:
         if red_attackers < 1 or blue_attackers < 1:
             raise ValueError("Stage-3 HAD requires at least one agent on each side")
@@ -114,12 +125,14 @@ class HADStage3Adapter:
             )
         if split_spacing < 0.0:
             raise ValueError("split_spacing must be non-negative")
+        if horizon_policy not in ("red_win", "draw", "blue_win"):
+            raise ValueError("horizon_policy must be red_win, draw, or blue_win")
 
-        from had_env.core.config import AeroPoint
+        from had_env.core.config import AeroPoint, DefaultTargetRegion
         from had_env.core.make_env import HADEnv
 
-        region = np.asarray(target_region, dtype=np.float64)
-        if region.shape != (3, 2):
+        region = np.asarray(DefaultTargetRegion if target_region is None else target_region, dtype=np.float64)
+        if region.shape != (3, 2) or not np.all(np.isfinite(region)):
             raise ValueError("target_region must provide low/high bounds for x, y, z")
         bounds = np.asarray(AeroPoint, dtype=np.float64)
         if np.any(region[:, 0] > region[:, 1]):
@@ -134,7 +147,7 @@ class HADStage3Adapter:
             fixed_positions = None
         else:
             fixed_positions = np.asarray(target_positions, dtype=np.float64)
-            if fixed_positions.shape != (targets, 3):
+            if fixed_positions.shape != (targets, 3) or not np.all(np.isfinite(fixed_positions)):
                 raise ValueError("target_positions must have shape [targets, 3]")
             if np.any(fixed_positions < bounds[:, 0]) or np.any(
                 fixed_positions > bounds[:, 1]
@@ -147,7 +160,20 @@ class HADStage3Adapter:
             targets,
             task_type=task_type,
             target_region=region,
+            target_initialization=target_initialization, target_positions=fixed_positions,
+            task_mode=task_mode,
+            target_health=target_health,
+            spatial_dim=spatial_dim,
+            plane_altitude=plane_altitude,
         )
+        self.task_mode = self.env.task_mode
+        self.target_health = self.env.target_health
+        self.spatial_dim = self.env.spatial_dim
+        self.plane_altitude = self.env.plane_altitude
+        self.valid_action_ids = tuple(int(i) for i in range(len(ACCELERATION_PRIMITIVES))
+                                      if self.spatial_dim == 3 or ACCELERATION_PRIMITIVES[i, 2] == 0)
+        fixed_positions = self.env.fixed_target_positions
+        self.target_initialization = self.env.target_initialization
         self.max_steps = int(max_steps)
         self.target_region = region.astype(np.float32)
         self.fixed_target_positions = (
@@ -163,6 +189,7 @@ class HADStage3Adapter:
         self._parking_position = np.asarray([2450.0, 2450.0, 950.0], dtype=np.float64)
         self.blue_rule_style = blue_rule_style
         self.split_spacing = float(split_spacing)
+        self.horizon_policy = str(horizon_policy)
         self.step_count = 0
         self.rng = np.random.default_rng()
         self._red_assignment: Dict[int, Optional[int]] = {}
@@ -244,17 +271,21 @@ class HADStage3Adapter:
 
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        self.env.reset(evaluate=True, seed=seed)
         positions = self.fixed_target_positions if target_positions is None else np.asarray(
             target_positions, dtype=np.float64
         )
         if positions is not None:
             self._set_target_positions(positions)
-            self._planned_target_positions = np.asarray(positions, dtype=np.float64).copy()
+            self.env.fixed_target_positions = np.asarray([target.position for target in self.env.targets])
+            self.env.target_initialization = 'fixed'
         else:
-            self._planned_target_positions = np.asarray(
-                [target.position for target in self.env.targets], dtype=np.float64
-            )
+            self.env.fixed_target_positions = None
+            self.env.target_initialization = self.target_initialization
+        # Install target coordinates before spawning Red around those targets.
+        self.env.reset(evaluate=True, seed=seed)
+        self._planned_target_positions = np.asarray(
+            [target.position for target in self.env.targets], dtype=np.float64
+        )
         requested_active = self.all_target_ids
         if active_target_ids is not None:
             requested = self._normalise_active_target_ids(active_target_ids)
@@ -283,12 +314,14 @@ class HADStage3Adapter:
     def _set_target_positions(self, positions: np.ndarray) -> None:
         from had_env.core.config import AeroPoint
 
-        array = np.asarray(positions, dtype=np.float64)
-        if array.shape != (len(self.env.targets), 3):
+        array = np.asarray(positions, dtype=np.float64).copy()
+        if array.shape != (len(self.env.targets), 3) or not np.all(np.isfinite(array)):
             raise ValueError("target_positions must have shape [targets, 3]")
         bounds = np.asarray(AeroPoint, dtype=np.float64)
         if np.any(array < bounds[:, 0]) or np.any(array > bounds[:, 1]):
             raise ValueError("target_positions must stay inside the HAD world")
+        if self.spatial_dim == 2:
+            array[:, 2] = self.plane_altitude
         for target, position in zip(self.env.targets, array):
             target.set_position(position.tolist())
             target.initial_position = position.tolist()
@@ -305,8 +338,6 @@ class HADStage3Adapter:
         return values
 
     def _apply_target_activity_positions(self, *, reset_activated: bool) -> None:
-        from had_env.core.config import initial_health
-
         if self._planned_target_positions is None:  # pragma: no cover - reset invariant
             raise RuntimeError("planned target positions are unavailable")
         for target_id, target in enumerate(self.env.targets):
@@ -316,12 +347,12 @@ class HADStage3Adapter:
                 target.set_position(position.tolist())
                 target.initial_position = position.tolist()
                 if reset_activated:
-                    target.Health = float(initial_health)
+                    target.Health = float(target.initial_health)
             else:
                 target.set_position(self._parking_position.tolist())
                 target.initial_position = self._parking_position.tolist()
                 # A dormant fixed-world entity is not a failed objective.
-                target.Health = float(initial_health)
+                target.Health = float(target.initial_health)
         self.env.update_alive_agents()
 
     def set_active_targets(
@@ -460,11 +491,15 @@ class HADStage3Adapter:
         return ACCELERATION_PRIMITIVES[value]
 
     def _nearest_acceleration(self, direction: np.ndarray) -> int:
+        direction = np.asarray(direction, dtype=np.float64).copy()
+        if self.spatial_dim == 2:
+            direction[2] = 0.0
         norm = float(np.linalg.norm(direction))
         if norm < 1e-8:
             return 0
         unit = np.asarray(direction, dtype=np.float64) / norm
-        return int(np.argmax(ACCELERATION_PRIMITIVES @ unit))
+        candidates = np.asarray(self.valid_action_ids, dtype=np.int64)
+        return int(candidates[np.argmax(ACCELERATION_PRIMITIVES[candidates] @ unit)])
 
     def commanded_rule_actions(
         self,
@@ -534,22 +569,16 @@ class HADStage3Adapter:
     def _split_lateral_offset(self, index: int, count: int) -> float:
         """Scale ``split_rush`` lanes without parking attackers out of range.
 
-        The frozen Round-01 rule used 180 world units between lanes.  That is
-        unchanged for rosters up to six (the largest S2 collection roster).
-        For larger target groups, the total half-width is capped at 90% of the
-        native objective attack radius, so every lane still intersects the
-        assigned objective's firing footprint instead of becoming a permanent
-        non-attacking trajectory.
+        Lane spacing is capped at 90% of this environment's automatic-fire
+        radius, so lanes stay inside the firing footprint in both 2D and 3D.
         """
 
         if count < 1 or not 0 <= int(index) < int(count):
             raise ValueError("split_rush slot must lie inside a non-empty group")
         if count == 1:
             return 0.0
-        from had_env.core.config import AttackDistance
-
         nominal_half_width = self.split_spacing * (count - 1) / 2.0
-        maximum_half_width = 0.9 * float(np.max(AttackDistance))
+        maximum_half_width = 0.9 * self.env.fire_range
         half_width = min(nominal_half_width, maximum_half_width)
         return float(-half_width + 2.0 * half_width * int(index) / (count - 1))
 
@@ -580,6 +609,8 @@ class HADStage3Adapter:
             if agent.Health <= 0:
                 values[index] = 0
             self._decode_acceleration(values[index])
+            if values[index] not in self.valid_action_ids:
+                raise ValueError("2D commanded actions must use a planar acceleration ID")
         return np.asarray(values, dtype=np.int64)
 
     def step(
@@ -596,7 +627,7 @@ class HADStage3Adapter:
         Blue rule.  Supplying actions is useful for controlled counterfactuals.
         """
 
-        if self._terminal_sign() != 0 or self.step_count >= self.max_steps:
+        if self.env.is_episode_done() or self.step_count >= self.max_steps:
             raise RuntimeError("cannot step a completed Stage-3 episode")
         red = self._coerce_actions("Red", red_action_ids)
         blue = (
@@ -625,10 +656,9 @@ class HADStage3Adapter:
         ]
         # This adapter supplies its own observations, events and task reward.
         self.env.step_physics(physical_actions)
-        self.env.update_alive_agents()
         self.step_count += 1
         terminal_sign = self._terminal_sign()
-        terminated = terminal_sign != 0
+        terminated = self.env.is_episode_done()
         truncated = self.step_count >= self.max_steps and not terminated
         done = terminated or truncated
         self.last_events = self._detect_events(
@@ -637,14 +667,25 @@ class HADStage3Adapter:
             truncated=truncated,
             terminal_sign=terminal_sign,
         )
-        outcome = terminal_sign if terminated else (1 if truncated else 0)
-        red_reward = float(outcome if done else 0.0)
+        if self.task_mode == "damage":
+            outcome = 0
+        elif terminated:
+            outcome = terminal_sign
+        elif truncated:
+            outcome = {"red_win": 1, "blue_win": -1, "draw": 0}[self.horizon_policy]
+        else:
+            outcome = 0
+        red_reward = (-self.env.step_target_damage if self.task_mode == "damage"
+                      else float(outcome if done else 0.0))
         rewards = {"Red": red_reward, "Blue": -red_reward}
         state = self.global_state()
         info: Dict[str, object] = {
+            **self.env.task_info(),
             "terminated": terminated,
             "truncated": truncated,
+            "outcome": int(outcome),
             "outcome_red": float(outcome),
+            "horizon_policy": self.horizon_policy,
             "step": int(self.step_count),
             "events": [event.as_dict() for event in self.last_events],
             "red_assignment": self.red_assignment,
@@ -653,10 +694,16 @@ class HADStage3Adapter:
             "blue_actions": blue.tolist(),
             "blue_rule_style": self.blue_rule_style if blue_style is None else blue_style,
             "targets": state["targets"],
+            "spatial_dim": self.spatial_dim,
+            "plane_altitude": self.plane_altitude,
+            "bootstrap_mask": float(not terminated),
+            "remaining_steps": max(0, self.max_steps - self.step_count),
         }
         return state, rewards, done, info
 
     def _terminal_sign(self) -> int:
+        if self.task_mode == "damage":
+            return 0
         active_breached = any(
             self.env.targets[target_id].Health < 1e-3
             for target_id in self.target_ids
@@ -770,18 +817,20 @@ class HADStage3Adapter:
         if terminated:
             events.append(
                 HADStage3Event(
-                    kind=("red_win" if terminal_sign > 0 else "blue_win"),
+                    kind=("episode_finished" if self.task_mode == "damage" else
+                          "red_win" if terminal_sign > 0 else "blue_win"),
                     step=self.step_count,
-                    side=("Red" if terminal_sign > 0 else "Blue"),
+                    side=(None if self.task_mode == "damage" else
+                          "Red" if terminal_sign > 0 else "Blue"),
                     terminal=True,
                 )
             )
         elif truncated:
             events.append(
                 HADStage3Event(
-                    kind="horizon_survived",
+                    kind="time_limit" if self.task_mode == "damage" else "horizon_survived",
                     step=self.step_count,
-                    side="Red",
+                    side=None if self.task_mode == "damage" else "Red",
                     terminal=True,
                 )
             )
@@ -795,6 +844,9 @@ class HADStage3Adapter:
             "velocity": np.asarray(entity.velocity, dtype=np.float64).copy(),
             "health": float(entity.Health),
             "alive": bool(entity.Health > 0),
+            "initial_health": float(entity.initial_health),
+            "step_damage": float(entity.step_damage),
+            "cumulative_damage": float(entity.cumulative_damage),
         }
 
     def agent_states(self, side: str) -> Dict[int, Dict[str, object]]:
@@ -831,6 +883,10 @@ class HADStage3Adapter:
         """Return a copy-only command state suitable for logging/planning."""
 
         return {
+            **self.env.task_info(),
+            "spatial_dim": self.spatial_dim,
+            "plane_altitude": self.plane_altitude,
+            "valid_action_ids": self.valid_action_ids,
             "step": int(self.step_count),
             "red": self.agent_states("Red"),
             "blue": self.agent_states("Blue"),
@@ -842,8 +898,17 @@ class HADStage3Adapter:
 
     def snapshot(self) -> HADStage3Snapshot:
         """Capture an exact physical and command-level branch point."""
-
+        from had_env.core.version import PHYSICS_PROTOCOL
         return HADStage3Snapshot(
+            task_mode=self.task_mode,
+            spatial_dim=self.spatial_dim,
+            plane_altitude=self.plane_altitude,
+            target_initialization=self.env.target_initialization,
+            target_health=self.target_health,
+            physics_protocol=PHYSICS_PROTOCOL,
+            max_steps=self.max_steps,
+            horizon_policy=self.horizon_policy,
+            last_physics_events=tuple(copy.deepcopy(self.env.last_physics_events)),
             step_count=int(self.step_count),
             entity_states=tuple(
                 copy.deepcopy(entity.__dict__) for entity in self.env.world
@@ -866,7 +931,15 @@ class HADStage3Adapter:
         continuation_seed: Optional[int] = None,
     ) -> Dict[str, object]:
         """Restore a branch, optionally replacing continuation RNG streams."""
-
+        from had_env.core.version import PHYSICS_PROTOCOL
+        if (getattr(snapshot, "physics_protocol", None) != PHYSICS_PROTOCOL
+                or snapshot.task_mode != self.task_mode
+                or snapshot.spatial_dim != self.spatial_dim
+                or snapshot.plane_altitude != self.plane_altitude
+                or snapshot.target_health != self.target_health
+                or snapshot.max_steps != self.max_steps
+                or snapshot.horizon_policy != self.horizon_policy):
+            raise ValueError("Snapshot physics or task configuration differs; reset the environment")
         if len(snapshot.entity_states) != len(self.env.world):
             raise ValueError("HAD Stage-3 snapshot roster differs from adapter roster")
         expected_red = set(self.red_ids)
@@ -875,14 +948,24 @@ class HADStage3Adapter:
             dict(snapshot.blue_assignment)
         ) != expected_blue:
             raise ValueError("HAD Stage-3 snapshot assignment roster differs")
+        if tuple(snapshot.active_target_ids) != self.all_target_ids:
+            raise ValueError("snapshot violates the fixed-target Stage-3 protocol")
+        if not 0 <= snapshot.step_count <= self.max_steps:
+            raise ValueError("snapshot step lies outside the episode horizon")
+        for entity, state in zip(self.env.world, snapshot.entity_states):
+            if state.get("Id") != entity.Id or state.get("Type") != entity.Type:
+                raise ValueError("snapshot entity identity differs from adapter roster")
         for entity, state in zip(self.env.world, snapshot.entity_states):
             entity.__dict__.clear()
             entity.__dict__.update(copy.deepcopy(dict(state)))
         self.step_count = int(snapshot.step_count)
+        self.env.target_initialization = snapshot.target_initialization
+        self.env.physics_step_count = self.step_count
+        self.env.last_physics_events = list(copy.deepcopy(snapshot.last_physics_events))
+        self.env.boundary_clips = sum(len(getattr(entity, "_clamped_axes", ()))
+                                      for entity in self.env.agents)
         self._red_assignment = dict(snapshot.red_assignment)
         self._blue_assignment = dict(snapshot.blue_assignment)
-        if tuple(snapshot.active_target_ids) != self.all_target_ids:
-            raise ValueError("snapshot violates the fixed-target Stage-3 protocol")
         self._active_target_ids = set(self.all_target_ids)
         self.last_events = copy.deepcopy(snapshot.last_events)
         self.env.update_alive_agents()

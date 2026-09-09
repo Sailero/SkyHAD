@@ -7,27 +7,23 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from threading import RLock
 
 import numpy as np
 from gymnasium import spaces
 from gymnasium.utils import seeding
 from pettingzoo import ParallelEnv
 
-from had_env.actions import ACCELERATION_PRIMITIVES
+from had_env.actions import ACCELERATION_PRIMITIVES, PLANAR_ACCELERATION_PRIMITIVES
 from had_env.core.config import Interval
 from had_env.scenarios.defense import Scenario
-
-
-_LEGACY_RNG_LOCK = RLock()
 
 
 class HADParallelEnv(ParallelEnv):
     """Both teams submit actions from the same pre-step observations.
 
-    Observation rows retain native HAD normalization, in fixed world order
-    excluding self: relative position (3), relative velocity (3), alive (1).
-    They include all entities; scout visibility is not newly imposed.
+    Observation rows are in fixed world order excluding self:
+    relative position (3), relative velocity (3), health, alive, and
+    red/blue/target flags. Dead rows are zeroed; ``entity_mask`` is in info.
 
     By default scalar reward equals the agent's team's ``RealReward``. Set an
     explicit four-element ``reward_weights`` to take a weighted sum of native
@@ -35,9 +31,20 @@ class HADParallelEnv(ParallelEnv):
     are always available in infos. The episode component already includes
     RealReward and must not be added a second time.
 
-    A killed agent receives its final native transition and is then removed
-    from ``agents``; its fixed entity slot remains observable by survivors.
+    In survival mode a killed agent receives its final native transition and
+    is removed from ``agents``; its fixed entity slot remains observable.
+    Damage mode keeps every agent slot until the world ends: dead agents have
+    zero observations and forced no-op actions, and continue receiving the
+    team's target-damage reward. Each slot receives the full team reward;
+    summing rewards across teammates would count the same reward repeatedly.
+    ``agent_mask`` marks participation for the returned observation/next action;
+    use the preceding observation's mask for the action that caused a death.
+    ``bootstrap_mask`` is the global team critic mask and remains one after a
+    death or sampling truncation.
     ``max_cycles`` is a sampling truncation and never awards a new win.
+    Time is available in info; observation and state dimensions are unchanged.
+    Planar (default) control uses 9 discrete actions or a 2-vector; spatial
+    control explicitly selects spatial_dim=3 for 27 actions or a 3-vector.
     """
 
     metadata = {"name": "had_defense_v1", "render_modes": ["human", "rgb_array"],
@@ -52,9 +59,17 @@ class HADParallelEnv(ParallelEnv):
         if not isinstance(continuous, bool):
             raise ValueError("continuous must be a boolean")
         self.scenario = scenario or Scenario()
+        self.task_mode = self.scenario.task_mode
+        self.spatial_dim = self.scenario.spatial_dim
+        self.acceleration_primitives = (
+            PLANAR_ACCELERATION_PRIMITIVES if self.spatial_dim == 2 else ACCELERATION_PRIMITIVES
+        ).copy()
+        self.metadata = {**type(self).metadata, "spatial_dim": self.spatial_dim}
         self.max_cycles, self.continuous, self.render_mode = max_cycles, continuous, render_mode
         self.reward_weights = None
         if reward_weights is not None:
+            if self.task_mode == "damage":
+                raise ValueError("damage mode uses raw target damage and does not accept reward_weights")
             weights = np.asarray(reward_weights, dtype=np.float64)
             if weights.shape != (4,) or not np.isfinite(weights).all():
                 raise ValueError("reward_weights must contain four finite values")
@@ -65,14 +80,20 @@ class HADParallelEnv(ParallelEnv):
                                 + [f"blue_{i}" for i in range(self.scenario.blue_count)])
         self.agent_name_mapping = {name: i for i, name in enumerate(self.possible_agents)}
         self.entity_names = self.possible_agents + [f"target_{i}" for i in range(self.scenario.target_count)]
-        shape = (len(self.entity_names) - 1, 7)
-        # Legacy normalization is not guaranteed to be inside [-1, 1].
+        self._observation_entities = {
+            agent: tuple(name for name in self.entity_names if name != agent)
+            for agent in self.possible_agents
+        }
+        from had_env.core.config import OBS_ENTITY_DIM
+        shape = (len(self.entity_names) - 1, OBS_ENTITY_DIM)
         self.observation_spaces = {a: spaces.Box(-np.inf, np.inf, shape, np.float32)
                                    for a in self.possible_agents}
-        self.action_spaces = {a: (spaces.Box(-1., 1., (3,), np.float32) if continuous
-                                  else spaces.Discrete(len(ACCELERATION_PRIMITIVES)))
+        self.action_spaces = {a: (spaces.Box(-1., 1., (self.spatial_dim,), np.float32) if continuous
+                                  else spaces.Discrete(len(self.acceleration_primitives)))
                               for a in self.possible_agents}
-        self.state_space = spaces.Box(-np.inf, np.inf, (len(self.entity_names) * 7,), np.float32)
+        self.state_space = spaces.Box(-np.inf, np.inf, (len(self.entity_names) * OBS_ENTITY_DIM,), np.float32)
+        self._all_actions = (1,) * len(self.acceleration_primitives)
+        self._noop_actions = (1,) + (0,) * (len(self.acceleration_primitives) - 1)
         self.agents = []
         self.num_cycles, self.outcome_red = 0, 0
         self._has_reset, self._closed = False, False
@@ -89,8 +110,6 @@ class HADParallelEnv(ParallelEnv):
         self.np_random, value = seeding.np_random(seed)
         self.np_random_seed = int(value)
         self.world.np_random = self.np_random
-        # One legacy anti-parallel rotation fallback uses np.random.random.
-        self._legacy_random_state = np.random.RandomState(int(value) % (2**32)).get_state()
         children = np.random.SeedSequence(value).spawn(2 * len(self.possible_agents))
         for i, agent in enumerate(self.possible_agents):
             self.action_spaces[agent].seed(int(children[2*i].generate_state(1)[0]))
@@ -106,29 +125,34 @@ class HADParallelEnv(ParallelEnv):
         self.num_cycles, self.outcome_red = 0, 0
         self._has_reset, self._closed = True, False
         obs = self._observations(native_obs, self.agents)
-        infos = {a: self._info(a) for a in self.agents}
+        task_info = self.world.task_info()
+        infos = {a: self._info(a, task_info=task_info) for a in self.agents}
         if self.render_mode == "human":
             self.render()
         return obs, infos
 
     def _observations(self, values, agents):
-        return {a: np.asarray(values[self.agent_name_mapping[a]], dtype=np.float32).copy()
-                for a in agents}
+        return {
+            a: (np.zeros(self.observation_spaces[a].shape, dtype=np.float32)
+                if self.task_mode == "damage" and self._entity(a).Health <= 0
+                else np.array(values[self.agent_name_mapping[a]], dtype=np.float32, copy=True))
+            for a in agents
+        }
 
     def _decode_action(self, agent, action):
         if not self.continuous:
             if isinstance(action, (bool, np.bool_)) or not self.action_space(agent).contains(action):
-                raise ValueError(f"{agent} action must be an integer in 0..26")
+                raise ValueError(f"{agent} action must be an integer in 0..{len(self.acceleration_primitives) - 1}")
             # tolist preserves the original discrete-control arithmetic path.
-            return ACCELERATION_PRIMITIVES[int(action)].tolist()
+            return self.acceleration_primitives[int(action)].tolist()
         try:
             value = np.asarray(action)
         except (ValueError, TypeError) as error:
-            raise ValueError(f"{agent} action must be a finite 3-vector in [-1,1]") from error
-        if (value.shape != (3,) or value.dtype.kind not in "iuf"
+            raise ValueError(f"{agent} action must be a finite {self.spatial_dim}-vector in [-1,1]") from error
+        if (value.shape != (self.spatial_dim,) or value.dtype.kind not in "iuf"
                 or not np.isfinite(value).all() or np.any(np.abs(value) > 1)):
-            raise ValueError(f"{agent} action must be a finite 3-vector in [-1,1]")
-        return value.tolist()
+            raise ValueError(f"{agent} action must be a finite {self.spatial_dim}-vector in [-1,1]")
+        return value.tolist() + ([0.] if self.spatial_dim == 2 else [])
 
     def step(self, actions):
         if not self._has_reset or self._closed:
@@ -139,27 +163,32 @@ class HADParallelEnv(ParallelEnv):
             return {}, {}, {}, {}, {}
         acting = self.agents.copy()
         # Decode the complete joint action before touching physics or RNG.
-        decoded = {a: self._decode_action(a, actions[a]) for a in acting}
+        decoded = {
+            a: ([0., 0., 0.] if self.task_mode == "damage" and self._entity(a).Health <= 0
+                else self._decode_action(a, actions[a]))
+            for a in acting
+        }
         batch = [decoded.get(a, [0., 0., 0.]) for a in self.possible_agents]
-        with _LEGACY_RNG_LOCK:
-            ambient = np.random.get_state()
-            np.random.set_state(self._legacy_random_state)
-            try:
-                self.world.step_physics(batch)
-                native_obs = self.scenario.observation(self.world)
-                native_rewards = self.scenario.reward(self.world)
-            finally:
-                self._legacy_random_state = np.random.get_state()
-                np.random.set_state(ambient)
+        self.world.step_physics(batch)
+        native_obs = self.scenario.observation(self.world)
+        native_rewards = self.scenario.reward(self.world)
         self.num_cycles += 1
         self.outcome_red = self.scenario.done(self.world)
-        terminations = {a: bool(self.outcome_red or self._entity(a).Health <= 0) for a in acting}
+        global_terminated = bool(self.world.is_episode_done())
+        global_truncated = bool(self.num_cycles >= self.max_cycles and not global_terminated)
+        terminations = {
+            a: bool(global_terminated or (self.task_mode == "survival" and self._entity(a).Health <= 0))
+            for a in acting
+        }
         truncations = {a: bool(self.num_cycles >= self.max_cycles and not terminations[a]) for a in acting}
+        task_info = self.world.task_info()
         rewards, infos = {}, {}
         for a in acting:
-            info = self._info(a, native_rewards)
+            info = self._info(a, native_rewards, task_info=task_info,
+                              global_terminated=global_terminated, global_truncated=global_truncated)
             info["terminated"], info["truncated"] = terminations[a], truncations[a]
-            rewards[a] = (info["RealReward"] if self.reward_weights is None else
+            rewards[a] = (info["team_reward"] if self.task_mode == "damage" else
+                          info["RealReward"] if self.reward_weights is None else
                           float(np.dot(info["LatentReward"], self.reward_weights)))
             infos[a] = info
         observations = self._observations(native_obs, acting)
@@ -171,17 +200,38 @@ class HADParallelEnv(ParallelEnv):
     def _entity(self, agent):
         return self.world.agents[self.agent_name_mapping[agent]]
 
-    def _info(self, agent, rewards=None):
+    def _info(self, agent, rewards=None, *, task_info=None,
+              global_terminated=False, global_truncated=False):
         entity = self._entity(agent)
         side = entity.Color
         index = self.agent_name_mapping[agent] - (self.scenario.red_count if side == "Blue" else 0)
         real = float(rewards["RealReward"][side]) if rewards else 0.
         latent = list(map(float, rewards["LatentReward"][side][index])) if rewards else [0.] * 4
-        return {"entity_id": int(entity.Id), "side": side.lower(), "role": entity.Type.lower(),
-                "alive": bool(entity.Health > 0), "health": float(entity.Health),
-                "observation_entities": tuple(n for n in self.entity_names if n != agent),
+        alive = bool(entity.Health > 0)
+        task = task_info if task_info is not None else self.world.task_info()
+        team_reward = ((-1.0 if side == "Red" else 1.0) * float(task["step_target_damage"])
+                       if self.task_mode == "damage" else real)
+        mask = None
+        if getattr(self.world, "entity_mask", None) is not None:
+            index = self.agent_name_mapping[agent]
+            if index < len(self.world.entity_mask):
+                mask = tuple(self.world.entity_mask[index])
+                if self.task_mode == "damage" and not alive:
+                    mask = (0.0,) * len(mask)
+        return {**task, "target_damage_by_target": dict(task["target_damage_by_target"]),
+                "episode_returns": (None if task["episode_returns"] is None else dict(task["episode_returns"])),
+                "entity_id": int(entity.Id), "side": side.lower(), "role": entity.Type.lower(),
+                "spatial_dim": self.spatial_dim, "plane_altitude": float(self.world.plane_altitude),
+                "alive": alive, "agent_mask": float(alive), "health": float(entity.Health),
+                "action_mask": None if self.continuous else self._all_actions if alive else self._noop_actions,
+                "observation_entities": self._observation_entities[agent],
+                "entity_mask": mask,
                 "RealReward": real, "LatentReward": latent, "outcome_red": self.outcome_red,
+                "team_reward": team_reward,
+                "global_terminated": bool(global_terminated), "global_truncated": bool(global_truncated),
+                "bootstrap_mask": float(not global_terminated),
                 "cycle": self.num_cycles, "sim_time": self.num_cycles * Interval,
+                "max_cycles": self.max_cycles, "remaining_cycles": max(0, self.max_cycles - self.num_cycles),
                 "events": copy.deepcopy(self.world.last_physics_events),
                 "core_version": self.world.core_version, "physics_protocol": self.world.physics_protocol}
 
@@ -208,9 +258,12 @@ class MPEEnv:
     """Fixed-order MPE-style list interface (not the old Gym package).
 
     ``reset`` returns obs_n; ``step`` returns obs_n, reward_n, done_n, info.
-    Observations are flattened native rows. Dead slots are zeroed after their
-    final transition; actions for already-dead slots are ignored. Discrete
-    actions are integer indices, or an explicit length-27 one-hot vector.
+    Observations are flattened native rows. Survival dead slots are zeroed
+    after their final transition. Damage dead slots immediately receive zero
+    observations and keep their team reward stream until the world ends.
+    Actions for already-dead slots are ignored. Discrete
+    actions are integer indices, or an explicit one-hot vector matching the
+    action space (9 entries in 2D, 27 in 3D).
     ``info['n']`` retains termination versus truncation for each fixed slot.
     """
 
@@ -244,10 +297,14 @@ class MPEEnv:
         for a, value in zip(self.possible_agents, actions):
             if a not in self.parallel_env.agents:
                 continue
+            if self.parallel_env.task_mode == "damage" and self.parallel_env._entity(a).Health <= 0:
+                joint[a] = [0.] * self.parallel_env.spatial_dim if self.parallel_env.continuous else 0
+                continue
             array = np.asarray(value)
-            if not self.parallel_env.continuous and array.shape == (27,):
+            action_count = None if self.parallel_env.continuous else self.parallel_env.action_space(a).n
+            if not self.parallel_env.continuous and array.shape == (action_count,):
                 if not np.all((array == 0) | (array == 1)) or np.sum(array) != 1:
-                    raise ValueError("MPE vector actions must be explicit length-27 one-hot vectors")
+                    raise ValueError(f"MPE vector actions must be explicit length-{action_count} one-hot vectors")
                 value = int(np.argmax(array))
             joint[a] = value
         obs, rewards, terms, truncs, infos = self.parallel_env.step(joint)

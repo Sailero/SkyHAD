@@ -96,6 +96,7 @@ class DecisionState:
     previous: Grouping
     memory: dict[int, tuple[float, ...]] = field(default_factory=dict)
     last_actions: dict[int, int] = field(default_factory=dict)
+    spatial_dim: int = 3
 
     def alive(self, side: str) -> tuple[Entity, ...]:
         key = side.lower()
@@ -110,7 +111,7 @@ class DecisionState:
 
     def to_dict(self) -> dict:
         return {"step": int(self.step), "max_steps": int(self.max_steps),
-                "opponent": self.opponent,
+                "opponent": self.opponent, "spatial_dim": self.spatial_dim,
                 "red": [asdict(entity) for entity in self.red],
                 "blue": [asdict(entity) for entity in self.blue],
                 "targets": [asdict(entity) for entity in self.targets],
@@ -124,4 +125,5 @@ class DecisionState:
                    *(tuple(Entity(**row) for row in data[side]) for side in ("red", "blue", "targets")),
                    Grouping.from_dict(data["previous"]),
                    {int(i): tuple(map(float, row)) for i, row in data.get("memory", {}).items()},
-                   {int(i): int(value) for i, value in data.get("last_actions", {}).items()})
+                   {int(i): int(value) for i, value in data.get("last_actions", {}).items()},
+                   int(data.get("spatial_dim", 3)))

@@ -16,7 +16,8 @@ from .session import SimulationSession
 def scenario_signature(scenario):
     """Structural test conditions, excluding opening randomness and split labels."""
     return (scenario.protocol_id, scenario.red_count, scenario.blue_count, scenario.opponent,
-            scenario.max_steps, scenario.command_interval, scenario.target_positions)
+            scenario.max_steps, scenario.command_interval, scenario.target_positions,
+            scenario.task_mode, scenario.target_health, scenario.horizon_policy, scenario.spatial_dim, scenario.plane_altitude)
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ def summarize_evaluation(rows, *, reference="rule"):
     """Keep ID/OOD and training seeds separate; uncertainty is across seed means."""
     groups, seen = defaultdict(list), set()
     for row in rows:
+        if row.get("task_mode") == "damage" or row.get("success_native") is None:
+            raise ValueError("The survival win-rate evaluator cannot summarize damage-task returns")
         key = (row["method_id"], int(row["training_seed"]), row["scenario_id"])
         if key in seen:
             raise ValueError("Duplicate evaluation unit")
@@ -112,6 +115,8 @@ def evaluate_policies(policies, scenarios, *, training_seeds=(0,), record_dir=No
     training seeds. A single external object is accepted for one seed only.
     """
     scenarios, seeds = tuple(scenarios), tuple(map(int, training_seeds))
+    if any(s.task_mode == "damage" for s in scenarios):
+        raise ValueError("Damage tasks use cumulative damage/returns, not the registered survival win-rate evaluator")
     if not scenarios or not seeds or len(set(seeds)) != len(seeds):
         raise ValueError("Provide scenarios and unique training seeds")
     if len({s.scenario_id for s in scenarios}) != len(scenarios):

@@ -7,11 +7,13 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
+from had_env.core.config import BlueColor, BorderColor, DeadAgentColor, RedColor, SurfaceColor
 
-SIDE_COLORS = {"red": "#ff797f", "blue": "#69b6ff", "targets": "#f2cd77"}
+
+SIDE_COLORS = {"red": QColor(*RedColor), "blue": QColor(*BlueColor), "targets": QColor(*RedColor)}
 
 
 def ensure_fonts():
@@ -58,6 +60,9 @@ class EntityItem(QGraphicsObject):
         self.labels = False
         self.light = False
         self.flash = False
+        resource_dir = Path(__file__).resolve().parents[1] / "core" / "resources"
+        self.target_image = QPixmap(str(resource_dir / "target.png"))
+        self.dead_target_image = QPixmap(str(resource_dir / "target_dead.png"))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
@@ -66,7 +71,7 @@ class EntityItem(QGraphicsObject):
         self.update_entity(entity)
 
     def boundingRect(self):
-        return QRectF(-22, -24, 136 if self.labels or self.isSelected() else 46, 54)
+        return QRectF(-22, -24, 136 if self.labels or self.isSelected() else 52, 54)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedChange:
@@ -75,7 +80,13 @@ class EntityItem(QGraphicsObject):
 
     def shape(self):
         path = QPainterPath()
-        path.addEllipse(QRectF(-13, -13, 26, 26))
+        if self.projection == "xy" and (
+            self.entity.get("side") == "targets"
+            or str(self.entity.get("role", "")).lower() in {"target", "entity"}
+        ):
+            path.addRect(QRectF(0, 0, 28, 28))
+        else:
+            path.addEllipse(QRectF(-13, -13, 26, 26))
         return path
 
     def update_entity(self, entity: dict):
@@ -94,61 +105,50 @@ class EntityItem(QGraphicsObject):
         if e.get("alive") is None:
             alive = True  # Unknown historical state is not evidence of death.
         color = QColor(SIDE_COLORS.get(e.get("side"), "#b9c4d5"))
-        if self.light:
-            color = color.darker(140)
         if not alive:
-            color = QColor("#788398")
-            painter.setOpacity(0.6)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            color = QColor(*DeadAgentColor)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         if self.isSelected() or self.flash:
             painter.setPen(cosmetic_pen("#ffffff" if self.flash else color, 1.8))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QRectF(-16, -16, 32, 32))
-        painter.setPen(cosmetic_pen(color.lighter(135), 1.1))
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(color)
         role = str(e.get("role", "Attack")).lower()
         velocity = e.get("velocity") or [0, 0, 0]
         vy = float(velocity[1 if self.projection == "xy" else 2])
         vx = float(velocity[0])
-        angle = math.degrees(math.atan2(-vy, vx)) if vx or vy else -90
+        angle = -math.degrees(math.atan2(vy, vx)) if self.projection == "xy" else (90 if vy < 0 else -90)
+        size = 12 if self.projection == "xy" else 6
         painter.save()
         if e.get("side") == "targets" or role in {"target", "entity"}:
-            painter.drawRect(QRectF(-7, -7, 14, 14))
-            painter.setPen(cosmetic_pen("#0e1523" if not self.light else "#ffffff", 1.6))
-            painter.drawLine(QPointF(-4, 0), QPointF(4, 0))
-            painter.drawLine(QPointF(0, -4), QPointF(0, 4))
+            if self.projection == "xy":
+                painter.drawPixmap(0, 0, self.target_image if alive else self.dead_target_image)
+            else:
+                painter.setBrush(QColor(*RedColor))
+                painter.drawEllipse(QRectF(-8, -8, 16, 16))
         elif role == "unknown":
+            painter.setPen(cosmetic_pen(color, 1.1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QRectF(-7, -7, 14, 14))
             painter.setFont(QFont("Segoe UI", 9))
             painter.drawText(QPointF(-3, 4), "?")
         else:
             painter.rotate(angle)
-            if "scout" in role:
-                painter.drawEllipse(QRectF(-6, -6, 12, 12))
-            elif "disturb" in role:
-                painter.drawPolygon(QPolygonF([QPointF(8, 0), QPointF(0, -7), QPointF(-8, 0), QPointF(0, 7)]))
+            if "attack" in role:
+                painter.drawEllipse(QRectF(-size, -size, 2 * size, 2 * size))
             else:
-                painter.drawPolygon(QPolygonF([QPointF(10, 0), QPointF(-7, -6), QPointF(-3, 0), QPointF(-7, 6)]))
-            if vx or vy:
-                painter.setPen(cosmetic_pen(color, 1.1))
-                painter.drawLine(QPointF(10, 0), QPointF(19, 0))
+                # Match DisplayPlayer.draw_agents / draw_isosceles_triangle.
+                top_angle = 45 if "disturb" in role else 36
+                half_base = 2 * size * math.tan(math.radians(top_angle / 2))
+                painter.drawPolygon(QPolygonF([
+                    QPointF(size, 0), QPointF(-size, -half_base), QPointF(-size, half_base),
+                ]))
         painter.restore()
         health = float(e.get("health") or 0)
-        max_health = float(e.get("max_health", 0) or 0)
-        if max_health > 0:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#344156" if not self.light else "#ced6e1"))
-            painter.drawRoundedRect(QRectF(-9, 12, 18, 2.5), 1, 1)
-            painter.setBrush(color)
-            painter.drawRoundedRect(QRectF(-9, 12, 18 * max(0, min(1, health / max_health)), 2.5), 1, 1)
-        if not alive:
-            painter.setPen(cosmetic_pen(color, 1.5))
-            painter.drawLine(QPointF(-8, -8), QPointF(8, 8))
-            painter.drawLine(QPointF(-8, 8), QPointF(8, -8))
         if self.labels or self.isSelected():
             painter.setFont(QFont("Segoe UI", 8))
-            painter.setPen(QColor("#28384d" if self.light else "#dce6f3"))
+            painter.setPen(QColor("#28384d"))
             painter.drawText(QPointF(15, -5), f"{e.get('side', '')[:1].upper()}{e.get('id')}")
             if self.isSelected():
                 painter.drawText(QPointF(15, 8), f"HP {health:.1f}" if e.get("health") is not None else "HP ?")
@@ -318,8 +318,6 @@ class BattlefieldView(QGraphicsView):
                 self._trail_cache[cache_key] = paths
             for key, path in paths.items():
                 color = QColor(SIDE_COLORS.get(key[0], "#8995a8"))
-                if self.light:
-                    color = color.darker(140)
                 color.setAlpha(140 if self.light else 90)
                 self._path(path, color, 1.2)
         groups = self.frame.get("groups", {}) or {}
@@ -356,29 +354,17 @@ class BattlefieldView(QGraphicsView):
                 self._path(path, "#a7b4c9", 1, True)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        painter.fillRect(rect, QColor("#f8fafc" if self.light else "#0d1522"))
-        # Tick spacing follows zoom; all text is drawn later in viewport coordinates.
-        desired = 85 / max(self.transform().m11(), 1e-6)
-        base = 10 ** math.floor(math.log10(max(desired, 1e-6)))
-        spacing = next(v * base for v in (1, 2, 5, 10) if v * base >= desired)
-        painter.setPen(cosmetic_pen("#e0e6ee" if self.light else "#1e2b3d", 1))
-        x = math.floor(rect.left() / spacing) * spacing
-        while x <= rect.right():
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-            x += spacing
-        y = math.floor(rect.top() / spacing) * spacing
-        while y <= rect.bottom():
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-            y += spacing
-        painter.setPen(cosmetic_pen("#aebac9" if self.light else "#35455e", 1.3))
-        painter.drawLine(QPointF(0, rect.top()), QPointF(0, rect.bottom()))
-        painter.drawLine(QPointF(rect.left(), 0), QPointF(rect.right(), 0))
+        # The native pygame surface is opaque: use the original RGB palette.
+        painter.fillRect(rect, QColor(*SurfaceColor[:3]))
+        painter.setPen(cosmetic_pen(QColor(*BorderColor[:3]), 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self._world_rect)
 
     def drawForeground(self, painter: QPainter, rect: QRectF):
         painter.save()
         painter.setWorldTransform(self.viewportTransform().inverted()[0], True)
         width, height = self.viewport().width(), self.viewport().height()
-        painter.setPen(QColor("#33465e" if self.light else "#a9b8cc"))
+        painter.setPen(QColor("#33465e"))
         painter.setFont(QFont("Segoe UI", 9))
         title = "XY · 平面 / m" if self.projection == "xy" else "XZ · 高度剖面 / m"
         painter.drawText(QPointF(18, 25), title)
@@ -407,7 +393,7 @@ class BattlefieldView(QGraphicsView):
         base = 10 ** math.floor(math.log10(metres))
         length = max(v * base for v in (1, 2, 5) if v * base <= metres)
         pixels = length * scale
-        painter.setPen(cosmetic_pen("#4b607c" if self.light else "#a9b8cc", 1.5))
+        painter.setPen(cosmetic_pen("#4b607c", 1.5))
         x, y = width - pixels - 22, height - 22
         painter.drawLine(QPointF(x, y), QPointF(x+pixels, y))
         painter.drawLine(QPointF(x, y-4), QPointF(x, y+4))
