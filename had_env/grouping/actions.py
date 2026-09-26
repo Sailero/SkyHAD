@@ -80,10 +80,10 @@ def rule_grouping(state):
     The connection radius is the native interaction radius. Components can
     contain any number of members; this rule creates no four-person capacity.
     """
-    from had_env.core.config import AttackDistance
+    from had_env.core.config import attack_distance_for
     result = []
     positions = {e.id: np.asarray(e.position) for e in state.alive('red')}
-    radius = float(np.max(AttackDistance))
+    radius = attack_distance_for(state.spatial_dim)[1]
     for group in grand_grouping(state).groups:
         remaining = set(group.members)
         while remaining:

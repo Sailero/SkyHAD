@@ -26,6 +26,11 @@ class Scenario:
     initialization: str = "random"
     evaluate: bool = False
     target_region: object = None
+    task_mode: str = "survival"
+    target_health: float | None = None
+    spatial_dim: int = 2
+    target_initialization: str = "random"
+    target_positions: object = None
 
     def __post_init__(self):
         for name in ("red_count", "blue_count", "target_count"):
@@ -40,6 +45,18 @@ class Scenario:
             raise ValueError("Blue must contain at least one attacker under native HAD termination rules")
         if self.initialization not in ("random", "uniform"):
             raise ValueError("initialization must be 'random' or 'uniform'")
+        if self.target_initialization not in ("random", "fixed"):
+            raise ValueError("target_initialization must be random or fixed")
+        if self.task_mode not in ("survival", "damage"):
+            raise ValueError("task_mode must be 'survival' or 'damage'")
+        if type(self.spatial_dim) is not int or self.spatial_dim not in (2, 3):
+            raise ValueError("spatial_dim must be 2 or 3")
+        if self.target_health is not None:
+            if isinstance(self.target_health, (bool, np.bool_)):
+                raise ValueError("target_health must be a positive finite number")
+            health = float(self.target_health)
+            if not np.isfinite(health) or health <= 0:
+                raise ValueError("target_health must be a positive finite number")
         if self.target_region is not None:
             bounds = np.asarray(self.target_region, dtype=float)
             if bounds.shape != (3, 2) or not np.isfinite(bounds).all():
@@ -54,6 +71,9 @@ class Scenario:
             blue_scout_n=self.blue_scouts, blue_disturb_n=self.blue_disturbers,
             task_type="Normal Showcase" if self.initialization == "uniform" else "Training",
             target_region=self.target_region, seed=seed,
+            task_mode=self.task_mode, target_health=self.target_health,
+            spatial_dim=self.spatial_dim,
+            target_initialization=self.target_initialization, target_positions=self.target_positions,
         )
 
     def reset_world(self, world, *, seed=None, options=None):

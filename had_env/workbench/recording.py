@@ -45,7 +45,7 @@ def _groups(value):
 
 def capture_frame(adapter, *, groups=None, info=None):
     """Copy a Stage-3 adapter after a physical step, without changing its state."""
-    from had_env.core.config import AttackDistance, Interval, initial_health
+    from had_env.core.config import Interval
     info = info or {}
     entities = []
     for side, rows in (("red", adapter.agent_states("Red")), ("blue", adapter.agent_states("Blue")),
@@ -56,17 +56,23 @@ def capture_frame(adapter, *, groups=None, info=None):
                           health=float(row["health"]), alive=bool(row["alive"]))
             if "entity_id" in row:
                 entity["entity_id"] = int(row["entity_id"])
-            entity["max_health"] = float(initial_health) if side == "targets" else 1.
-            entity["attack_range"] = float(max(AttackDistance)) if entity["role"] == "Attack" else None
+            entity["max_health"] = float(adapter.env.targets[entity_id].initial_health) if side == "targets" else 1.
+            if side == "targets":
+                target = adapter.env.targets[entity_id]
+                entity.update(step_damage=float(target.step_damage), cumulative_damage=float(target.cumulative_damage))
+            entity["attack_range"] = adapter.env.attack_distance[1] if entity["role"] == "Attack" else None
             entities.append(entity)
     native_events = copy.deepcopy(getattr(adapter.env, "last_physics_events", []))
     events = [{**event, "phase": "physics"} for event in native_events]
     events.extend({**event, "phase": "protocol"} for event in info.get("events", []))
     assignment = adapter.assignments
+    task = adapter.env.task_info()
+    if adapter.step_count >= adapter.max_steps and not task["episode_done"]:
+        task.update(episode_done=True, termination_reason="time_limit")
     frame = dict(step=int(adapter.step_count), sim_time=float(adapter.step_count * Interval), entities=entities,
                  groups={side: _groups((groups or {}).get(side)) for side in ("red", "blue")},
                  assignments={side.lower(): values for side, values in assignment.items()},
-                 events=events, actions={"red": {}, "blue": {}})
+                 events=events, actions={"red": {}, "blue": {}}, **task)
     for side in ("red", "blue"):
         values = info.get(f"{side}_actions", [])
         ids = getattr(adapter, f"{side}_ids")
@@ -127,6 +133,10 @@ class EpisodeRecorder:
         if self.episode.frames and int(frame["step"]) <= int(self.episode.frames[-1]["step"]):
             raise ValueError("Physical frames must advance strictly")
         self.episode.frames.append(frame)
+        for key in ("task_mode", "spatial_dim", "plane_altitude", "step_target_damage", "target_damage",
+                    "target_damage_by_target", "episode_returns", "episode_done", "termination_reason"):
+            if key in frame:
+                self.episode.metadata[key] = copy.deepcopy(frame[key])
 
     def append_decision(self, decision):
         self.episode.decisions.append(serializable(copy.deepcopy(decision)))

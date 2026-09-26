@@ -11,14 +11,18 @@ import numpy as np
 
 from had_env.grouping.adapter import HADStage3Event, HADStage3Snapshot
 from had_env.grouping.domain import Group, Grouping
+from had_env.core.version import PHYSICS_PROTOCOL
 from .identity import assert_behavior_compatible, source_identity
 
-SCHEMA = "had-workbench-snapshot-v1"
+SCHEMA = "had-workbench-snapshot-v2"
 _CLASSES = {cls.__name__: cls for cls in (HADStage3Snapshot, HADStage3Event, Grouping, Group)}
 _SNAPSHOT_KEYS = {"physical", "executor", "previous", "blue_grouping", "opponent_rng", "numpy_state",
-                  "done", "opponent", "max_steps", "command_interval", "seed", "group_max_size", "executor_type"}
+                  "done", "opponent", "max_steps", "command_interval", "seed", "group_max_size", "executor_type",
+                  "task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude"}
 _ENTITY_KEYS = {"position", "initial_position", "velocity", "Health", "Id", "render_id", "Color", "Type",
-                "acceleration", "vMax", "vMin", "wMax", "aMax", "Boundary", "IsFire", "is_active_objective"}
+                "acceleration", "vMax", "vMin", "wMax", "aMax", "Boundary", "IsFire", "is_active_objective",
+                "pre_position", "_clamped_axes", "initial_health", "task_mode", "step_damage", "cumulative_damage",
+                "spatial_dim", "plane_altitude"}
 
 
 def _hash(value):
@@ -113,9 +117,26 @@ def _validate(snapshot):
         raise ValueError("Snapshot object types do not match the registered task")
     if snapshot["executor_type"] != "RuleExecutor" or snapshot["group_max_size"] is not None:
         raise ValueError("Only the unbounded registered rule executor is supported")
-    if type(snapshot["done"]) is not bool or type(physical.step_count) is not int or not 0 <= physical.step_count <= snapshot["max_steps"] <= 50:
+    if physical.physics_protocol != PHYSICS_PROTOCOL:
+        raise ValueError("Snapshot physics protocol differs; legacy snapshots cannot be resumed")
+    if snapshot["task_mode"] not in ("survival", "damage") or physical.task_mode != snapshot["task_mode"]:
+        raise ValueError("Snapshot task modes differ")
+    if type(snapshot["spatial_dim"]) is not int or snapshot["spatial_dim"] not in (2, 3) or physical.spatial_dim != snapshot["spatial_dim"]:
+        raise ValueError("Snapshot spatial dimensions differ")
+    altitude = float(snapshot["plane_altitude"])
+    from had_env.core.config import AeroPoint
+    if not math.isfinite(altitude) or not AeroPoint[2][0] <= altitude <= AeroPoint[2][1] or physical.plane_altitude != altitude:
+        raise ValueError("Snapshot planar altitudes differ")
+    target_health = float(snapshot["target_health"])
+    if not math.isfinite(target_health) or target_health <= 0 or physical.target_health != target_health:
+        raise ValueError("Snapshot target-health configuration differs")
+    if snapshot["horizon_policy"] not in ("red_win", "draw", "blue_win"):
+        raise ValueError("Invalid snapshot horizon policy")
+    if physical.max_steps != snapshot["max_steps"] or physical.horizon_policy != snapshot["horizon_policy"]:
+        raise ValueError("Physical and command snapshot horizons differ")
+    if type(snapshot["done"]) is not bool or type(physical.step_count) is not int or type(snapshot["max_steps"]) is not int or not 1 <= snapshot["max_steps"] <= 500 or not 0 <= physical.step_count <= snapshot["max_steps"]:
         raise ValueError("Invalid snapshot time or terminal flag")
-    if not 1 <= snapshot["command_interval"] <= 50 or snapshot["opponent"] not in ("reactive", "balanced", "concentrated"):
+    if type(snapshot["command_interval"]) is not int or not 1 <= snapshot["command_interval"] <= 500 or snapshot["opponent"] not in ("reactive", "balanced", "concentrated"):
         raise ValueError("Invalid snapshot protocol")
     red = [i for i, _ in physical.red_assignment]
     blue = [i for i, _ in physical.blue_assignment]
@@ -127,14 +148,30 @@ def _validate(snapshot):
     for state in physical.entity_states:
         if not isinstance(state, dict) or not set(state) <= _ENTITY_KEYS:
             raise ValueError("Snapshot contains unregistered entity attributes")
-        if not {"Id", "position", "velocity", "Health", "Color", "Type"} <= set(state):
+        if not {"Id", "position", "velocity", "Health", "Color", "Type", "pre_position", "_clamped_axes",
+                "initial_health", "task_mode", "step_damage", "cumulative_damage", "spatial_dim", "plane_altitude"} <= set(state):
             raise ValueError("Snapshot omits required physical entity fields")
-        for key in ("position", "velocity"):
+        for key in ("position", "velocity", "pre_position"):
             value = np.asarray(state[key], float)
             if value.shape != (3,) or not np.isfinite(value).all():
                 raise ValueError("Entity position/velocity must be a finite xyz vector")
         if not np.isfinite(float(state["Health"])):
             raise ValueError("Entity health must be finite")
+        if state["spatial_dim"] != physical.spatial_dim or state["plane_altitude"] != altitude:
+            raise ValueError("Entity spatial configuration differs from snapshot")
+        if physical.spatial_dim == 2 and (state["position"][2] != altitude or state["pre_position"][2] != altitude
+                                         or state["velocity"][2] != 0 or state.get("acceleration", [0, 0, 0])[2] != 0):
+            raise ValueError("Planar snapshot contains out-of-plane state")
+        for key in ("step_damage", "cumulative_damage"):
+            if not math.isfinite(float(state[key])) or state[key] < 0:
+                raise ValueError("Target damage must be finite and nonnegative")
+        if state["cumulative_damage"] < state["step_damage"]:
+            raise ValueError("Step damage exceeds cumulative damage")
+        if state["Type"] == "Entity":
+            if state["task_mode"] != physical.task_mode or state["initial_health"] != target_health:
+                raise ValueError("Target state differs from the snapshot task configuration")
+            if physical.task_mode == "damage" and state["Health"] != target_health:
+                raise ValueError("Damage-mode targets must retain finite initial health")
     ordered_ids = [state["Id"] for state in physical.entity_states]
     if len(set(ordered_ids)) != len(ordered_ids) or ordered_ids[:len(red)+len(blue)] != red + blue:
         raise ValueError("Snapshot roster ordering is inconsistent")
@@ -161,7 +198,7 @@ def encode_snapshot(snapshot, *, source=None):
 def decode_snapshot(document, *, current_identity=None):
     """Reject incompatible sources or malformed state before constructing an environment."""
     if not isinstance(document, dict) or set(document) != {"schema", "source_identity", "payload_hash", "payload"} or document["schema"] != SCHEMA:
-        raise ValueError("Unsupported portable snapshot schema")
+        raise ValueError("Unsupported portable snapshot schema; legacy snapshots must be recreated under the current physics protocol")
     identity = document["source_identity"]
     if not isinstance(identity, dict) or not isinstance(identity.get("behavior_hash"), str):
         raise ValueError("Snapshot is missing its behavior identity")

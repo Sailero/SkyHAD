@@ -41,6 +41,8 @@ def branch_from_snapshot(snapshot, *, continuation_seed=None):
         snapshot = copy.deepcopy(snapshot)
         if snapshot.get("executor_type") != "RuleExecutor":
             raise ValueError("Only registered rule executor snapshots are supported here")
+        if not {"task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude"} <= snapshot.keys():
+            raise ValueError("Legacy snapshots lack task configuration and cannot be resumed")
         physical = snapshot["physical"]
         count = len(physical.active_target_ids)
         positions = [row["position"] for row in physical.entity_states[-count:]]
@@ -49,7 +51,9 @@ def branch_from_snapshot(snapshot, *, continuation_seed=None):
                        opponent=snapshot["opponent"], max_steps=snapshot["max_steps"],
                        command_interval=snapshot["command_interval"], targets=count,
                        target_positions=positions, lookahead=executor["lookahead"],
-                       guard_distance=executor["guard_distance"])
+                       guard_distance=executor["guard_distance"], task_mode=snapshot["task_mode"],
+                       target_health=snapshot["target_health"], horizon_policy=snapshot["horizon_policy"],
+                       spatial_dim=snapshot["spatial_dim"], plane_altitude=snapshot["plane_altitude"])
         env.reset(seed=snapshot["seed"])
         env.restore(snapshot)
         if continuation_seed is not None:
@@ -129,7 +133,7 @@ class Transition:
     reward: float
     done: bool
     delta: int
-    native_outcome: int
+    native_outcome: int | None
     terminated: bool
     truncated: bool
     info: dict
@@ -140,13 +144,18 @@ class Transition:
 
 class SimulationSession:
     def __init__(self, scenario=None, policy="rule", *, record=True, policy_seed=0):
+        from had_env.core.config import HorizonPolicy
         self.scenario = ScenarioSpec.from_dict(scenario) if isinstance(scenario, dict) else scenario or ScenarioSpec()
         self.policy = PolicyAdapter(policy, seed=policy_seed)
         self.record = bool(record)
         self.env = make_env(self.scenario.red_count, self.scenario.blue_count, opponent=self.scenario.opponent,
                             seed=self.scenario.opening_seed, max_steps=self.scenario.max_steps,
                             command_interval=self.scenario.command_interval,
-                            targets=len(self.scenario.target_positions), target_positions=self.scenario.target_positions)
+                            targets=len(self.scenario.target_positions), target_positions=self.scenario.target_positions,
+                            task_mode=self.scenario.task_mode, target_health=self.scenario.target_health,
+                            horizon_policy=HorizonPolicy if self.scenario.horizon_policy is None else self.scenario.horizon_policy,
+                            spatial_dim=self.scenario.spatial_dim,
+                            plane_altitude=self.scenario.plane_altitude)
         self.env.reset(seed=self.scenario.opening_seed)
         self.env.set_rng(self.scenario.opponent_seed)
         self.env.adapter.env.record_events = self.record
@@ -161,7 +170,8 @@ class SimulationSession:
                         physics_version=CORE_VERSION, physics_protocol=PHYSICS_PROTOCOL, source_identity=identity,
                         scenario=self.scenario.to_dict(), policies={"red": self.policy.name, "blue": self.scenario.opponent},
                         policy_seed=self.policy.seed, dt=float(Interval), complete=False,
-                        start_step=self.env.adapter.step_count, physical_events_available=hasattr(self.env.adapter.env, "last_physics_events"))
+                        start_step=self.env.adapter.step_count, physical_events_available=hasattr(self.env.adapter.env, "last_physics_events"),
+                        **self.env.adapter.env.task_info())
         if parent is not None:
             metadata["branch"] = parent
         if self.record:
@@ -240,13 +250,17 @@ class SimulationSession:
             self.env.adapter.step = old_step
         recorded_decision.update(delta=int(info["delta"]), event_reason=info["event_reason"],
                                  execution_status="completed")
-        native_outcome = (1 if info["success"] else -1) if done else 0
+        damage_mode = self.scenario.task_mode == "damage"
+        native_outcome = None if damage_mode else (1 if info["success"] else -1) if done else 0
         if done:
             if not self.record:
                 self.recorder.append_frame(capture_frame(self.env.adapter, groups=self._groups()))
-            self.recorder.finish(dict(success_native=bool(info["success"]), outcome_red=native_outcome,
-                                      termination_reason=info["event_reason"], reward=float(reward),
+            self.recorder.finish(dict(**self.env.adapter.env.task_info(),
+                                      success_native=None if damage_mode else bool(info["success"]), outcome_red=native_outcome,
+                                      event_reason=info["event_reason"], reward=float(reward),
+                                      terminated=bool(info["terminated"]), truncated=bool(info["truncated"]),
                                       execution_status="completed"))
+            self.recorder.episode.metadata.update(episode_done=True, termination_reason=info["event_reason"])
         return Transition(state, float(reward), bool(done), int(info["delta"]), native_outcome,
                           bool(info["terminated"]), bool(info["truncated"]), copy.deepcopy(info))
 
@@ -266,13 +280,19 @@ class SimulationSession:
         snapshot = decode_snapshot(document)
         scenario = ScenarioSpec.from_dict(scenario) if isinstance(scenario, dict) else scenario
         physical = snapshot["physical"]
+        from had_env.core.config import initial_health, HorizonPolicy, PlanarAltitude
+        scenario_health = float(initial_health if scenario.target_health is None else scenario.target_health)
+        scenario_horizon = HorizonPolicy if scenario.horizon_policy is None else scenario.horizon_policy
+        scenario_altitude = float(PlanarAltitude if scenario.plane_altitude is None else scenario.plane_altitude)
         target_positions = tuple(tuple(float(x) for x in row["position"])
                                  for row in physical.entity_states[-len(physical.active_target_ids):])
         if (scenario.red_count != len(physical.red_assignment) or scenario.blue_count != len(physical.blue_assignment)
                 or len(scenario.target_positions) != len(physical.active_target_ids)
                 or scenario.target_positions != target_positions
                 or scenario.max_steps != snapshot["max_steps"] or scenario.command_interval != snapshot["command_interval"]
-                or scenario.opponent != snapshot["opponent"]):
+                or scenario.opponent != snapshot["opponent"] or scenario.task_mode != snapshot["task_mode"]
+                or scenario_health != snapshot["target_health"] or scenario_horizon != snapshot["horizon_policy"]
+                or scenario.spatial_dim != snapshot["spatial_dim"] or scenario_altitude != snapshot["plane_altitude"]):
             raise ValueError("Scenario and portable snapshot protocols differ")
         if snapshot["done"]:
             raise ValueError("Cannot continue a terminal snapshot")

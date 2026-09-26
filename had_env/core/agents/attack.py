@@ -34,45 +34,30 @@ class AttackAgent(BaseAgent):
         return super(AttackAgent, self).get_flying_action() + [self.IsFire]
 
     def own_observation(self, world):
-        # 获取攻击距离内仍然存活的所有智能体信息
+        # 获取攻击距离内仍然存活的其他智能体信息，不含自身
         if self.Health > 0:
-            separations = distances_from(self.get_position(), [one.get_position() for one in world])
-            attack_range = np.max(AttackDistance)
-            return [one for one, separation in zip(world, separations)
+            others = [one for one in world if one is not self]
+            separations = distances_from(self.get_position(), [one.get_position() for one in others])
+            attack_range = self.fire_range
+            return [one for one, separation in zip(others, separations)
                     if separation < attack_range and one.Health > 0]
         else:
             return []
 
-    def choose_function_ruled_action(self, all_agents):  # 决定是否打击
-        own_obs = self.own_observation(all_agents)
-
-        RedAttackRatio = [attack_intensity_ratio(distance(self.get_position(), one.get_position()))
-                          for one in own_obs if one.Color == 'Red']
-        BlueAttackRatio = [attack_intensity_ratio(distance(self.get_position(), one.get_position()))
-                           for one in own_obs if one.Color == 'Blue']
-        EntityAttackRatio = [attack_intensity_ratio(distance(self.get_position(), one.get_position()))
-                             for one in own_obs if one.Color == 'Entity']
-        IsFire = False
-
-        # 对于蓝方智能体，打击逻辑有两个，第一是没有遇到目标点时尽可能杀伤红方智能体；第二是遇到目标点时尽可能对目标点进行杀伤
-        if self.Color == 'Blue':  # 对于蓝方战机
-            if len(EntityAttackRatio) > 0:
-                if len(RedAttackRatio) > 0:  # 目标点附近如果存在红方智能体立即打击
-                    IsFire = True
-                elif np.sum(EntityAttackRatio) >= attack_intensity_ratio(AvoidanceDistance + 1e-3):
-                    # 在安全情况下打击强度尽可能达到最大，即到达即将碰撞时打击。
-                    IsFire = True
-            # else:
-            #     if np.sum(RedAttackRatio) >= np.sum(BlueAttackRatio):
-            #         # 在没有遇到目标点的情况下，当对敌方智能体可以造成更多杀伤的时候，选择开火
-            #         IsFire = True
-
-        # 对于红方智能体，打击逻辑只有一个，就是对蓝方智能体进行更多杀伤的情况下进行开火
-        elif self.Color == 'Red':  # 对于红方战机
-            if np.sum(BlueAttackRatio) >= (np.sum(RedAttackRatio) + np.sum(EntityAttackRatio)) * RedAttackCoef:
-                IsFire = True
-
-        return IsFire
+    def choose_function_ruled_action(self, all_agents):  # 射程内有对应目标即开火
+        fire_range = self.fire_range
+        origin = self.get_position()
+        if self.Color == 'Blue':
+            return any(
+                one.Color == 'Entity' and one.Health > 0 and distance(origin, one.get_position()) < fire_range
+                for one in all_agents
+            )
+        if self.Color == 'Red':
+            return any(
+                one.Color == 'Blue' and one.Health > 0 and distance(origin, one.get_position()) < fire_range
+                for one in all_agents
+            )
+        return False
 
     def calculate_normalized_distance_to_targets(self, targets):
         """计算智能体到最近目标的归一化距离"""
@@ -122,9 +107,8 @@ class AttackAgent(BaseAgent):
         total_damage = 0.0
         for enemy in enemy_agents:
             dist = distance(self.get_position(), enemy.get_position())
-            # 使用与原有攻击奖励相似的逻辑，使用AttackDistance[1]作为最大攻击范围
-            if dist <= AttackDistance[1]:  # 在攻击范围内
-                damage_ratio = max(0, 1 - dist / AttackDistance[1])  # 距离越近伤害越大
+            if dist <= self.attack_distance[1]:  # 在当前场景的攻击范围内
+                damage_ratio = max(0, 1 - dist / self.attack_distance[1])
                 total_damage += damage_ratio
 
         return total_damage

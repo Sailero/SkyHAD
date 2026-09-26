@@ -23,7 +23,7 @@ def _records_state(adapter, grouping):
     return DecisionState(adapter.step_count, adapter.max_steps, 'reactive',
                          entities(adapter.agent_states('Red')),
                          entities(adapter.agent_states('Blue')),
-                         entities(adapter.target_states()), grouping)
+                         entities(adapter.target_states()), grouping, spatial_dim=adapter.spatial_dim)
 
 
 def threat_targets(state):
@@ -109,8 +109,7 @@ class RuleExecutor:
 
     @staticmethod
     def _nearest_action(adapter, direction):
-        norm = float(np.linalg.norm(direction))
-        return 0 if norm < 1e-9 else int(np.argmax(adapter.action_vectors @ (np.asarray(direction)/norm)))
+        return adapter._nearest_acceleration(np.asarray(direction, dtype=np.float64))
 
     def act(self, adapter, grouping):
         state = _records_state(adapter, grouping)
@@ -145,7 +144,7 @@ class RuleExecutor:
         return result
 
 
-def make_env(red, blue=None, opponent='reactive', seed=0, max_steps=50,
+def make_env(red, blue=None, opponent='reactive', seed=0, max_steps=100,
              command_interval=5, targets=2, target_positions=None, **kwargs):
     executor = kwargs.pop('executor', None)
     if executor is None:

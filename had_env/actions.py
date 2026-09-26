@@ -1,4 +1,4 @@
-"""The native 27 acceleration controls, shared by all HAD interfaces."""
+"""Native spatial controls and their order-preserving planar subset."""
 from itertools import product
 
 import numpy as np
@@ -22,3 +22,6 @@ def _make_acceleration_primitives() -> np.ndarray:
 
 
 ACCELERATION_PRIMITIVES = _make_acceleration_primitives()
+PLANAR_ACCELERATION_PRIMITIVES = ACCELERATION_PRIMITIVES[
+    ACCELERATION_PRIMITIVES[:, 2] == 0
+].copy()

@@ -1,4 +1,4 @@
-"""Physics protocol identity; retain the legacy update order in this release."""
+"""Physics protocol identity for the rebuilt, calibrated HAD environment."""
 
-CORE_VERSION = "had-workbench-1.0.0"
-PHYSICS_PROTOCOL = "legacy-snapshot-order-boundary-fix-v1"
+CORE_VERSION = "had-workbench-2.1.0"
+PHYSICS_PROTOCOL = "rebuild-calibrated-v3-r7-target-initialization"
