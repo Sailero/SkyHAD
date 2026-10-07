@@ -83,3 +83,23 @@ def test_render_does_not_mutate_physics_or_random_generators(env):
     assert before == after
     assert rng_before == repr(env.np_random.bit_generator.state)
     assert env.physics_step_count == 0
+
+
+def test_uav_glyphs_distinguish_models_and_orient_from_attitude():
+    from had_env.core.render.render import DisplayPlayer
+    pygame.init()
+    surface = pygame.Surface((800, 1000), pygame.SRCALPHA)
+    player = DisplayPlayer(surface)
+    row = dict(position=[.5, .5, .5], velocity=[100, 0, 0], type="Attack", alive=True,
+               env_agent_type="UAV_fixedwing", attitude=[1., 0., 0., 0.])
+    def pixels(value):
+        surface.fill((0, 0, 0, 0))
+        player.draw_agents(surface, [value], "Red")
+        return pygame.surfarray.array3d(surface).copy()
+    forward = pixels(row)
+    turned = pixels({**row, "attitude": [2**-.5, 0., 0., 2**-.5]})
+    quad = pixels({**row, "env_agent_type": "UAV_quadrotor"})
+    assert not np.array_equal(forward, turned)
+    assert not np.array_equal(forward, quad)
+    assert row["attitude"] == [1., 0., 0., 0.]
+    pygame.quit()

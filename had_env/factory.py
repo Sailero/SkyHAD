@@ -24,9 +24,8 @@ def make_env(scenario_name="defense", *, config=None, **kwargs):
         return make_open_score_env(**values)
     if api == "grouping":
         from had_env.grouping.environment import KnownOpponentEnv
-        aliases = {"red_count": "red", "blue_count": "blue", "max_cycles": "max_steps", "target_count": "targets"}
-        values = {aliases.get(k, k): v for k, v in values.items()}
-        return KnownOpponentEnv(**values)
+        values.setdefault('spatial_dim', 3)
+        return KnownOpponentEnv(config=values)
     if api not in ("parallel", "mpe"):
         raise ValueError("api must be parallel, mpe, grouping or open_score")
     effective = EnvConfig.from_values(values)

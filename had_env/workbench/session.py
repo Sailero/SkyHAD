@@ -41,7 +41,8 @@ def branch_from_snapshot(snapshot, *, continuation_seed=None):
         snapshot = copy.deepcopy(snapshot)
         if snapshot.get("executor_type") != "RuleExecutor":
             raise ValueError("Only registered rule executor snapshots are supported here")
-        if not {"task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude"} <= snapshot.keys():
+        if not {"task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude",
+                "env_agent_type", "env_agent_action_type", "effective_config"} <= snapshot.keys():
             raise ValueError("Legacy snapshots lack task configuration and cannot be resumed")
         physical = snapshot["physical"]
         count = len(physical.active_target_ids)
@@ -53,7 +54,9 @@ def branch_from_snapshot(snapshot, *, continuation_seed=None):
                        target_positions=positions, lookahead=executor["lookahead"],
                        guard_distance=executor["guard_distance"], task_mode=snapshot["task_mode"],
                        target_health=snapshot["target_health"], horizon_policy=snapshot["horizon_policy"],
-                       spatial_dim=snapshot["spatial_dim"], plane_altitude=snapshot["plane_altitude"])
+                       spatial_dim=snapshot["spatial_dim"], plane_altitude=snapshot["plane_altitude"],
+                       env_agent_type=snapshot["env_agent_type"], env_agent_action_type=snapshot["env_agent_action_type"],
+                       config=snapshot["effective_config"])
         env.reset(seed=snapshot["seed"])
         env.restore(snapshot)
         if continuation_seed is not None:
@@ -155,7 +158,10 @@ class SimulationSession:
                             task_mode=self.scenario.task_mode, target_health=self.scenario.target_health,
                             horizon_policy=HorizonPolicy if self.scenario.horizon_policy is None else self.scenario.horizon_policy,
                             spatial_dim=self.scenario.spatial_dim,
-                            plane_altitude=self.scenario.plane_altitude)
+                            plane_altitude=self.scenario.plane_altitude,
+                            env_agent_type=self.scenario.env_agent_type,
+                            env_agent_action_type=self.scenario.env_agent_action_type,
+                            config=self.scenario.env_config)
         self.env.reset(seed=self.scenario.opening_seed)
         self.env.set_rng(self.scenario.opponent_seed)
         self.env.adapter.env.record_events = self.record
@@ -280,10 +286,17 @@ class SimulationSession:
         snapshot = decode_snapshot(document)
         scenario = ScenarioSpec.from_dict(scenario) if isinstance(scenario, dict) else scenario
         physical = snapshot["physical"]
-        from had_env.core.config import initial_health, HorizonPolicy, PlanarAltitude
+        from had_env.core.config import initial_health, HorizonPolicy
+        from had_env.config import EnvConfig, load_config
+        config = load_config(scenario.env_config)
+        config.update(env_agent_type=scenario.env_agent_type, env_agent_action_type=scenario.env_agent_action_type,
+                      spatial_dim=scenario.spatial_dim, task_mode=scenario.task_mode)
+        if scenario.plane_altitude is not None:
+            config["plane_altitude"] = scenario.plane_altitude
+        effective = EnvConfig.from_values(config)
         scenario_health = float(initial_health if scenario.target_health is None else scenario.target_health)
         scenario_horizon = HorizonPolicy if scenario.horizon_policy is None else scenario.horizon_policy
-        scenario_altitude = float(PlanarAltitude if scenario.plane_altitude is None else scenario.plane_altitude)
+        scenario_altitude = effective.plane_altitude
         target_positions = tuple(tuple(float(x) for x in row["position"])
                                  for row in physical.entity_states[-len(physical.active_target_ids):])
         if (scenario.red_count != len(physical.red_assignment) or scenario.blue_count != len(physical.blue_assignment)
@@ -292,7 +305,10 @@ class SimulationSession:
                 or scenario.max_steps != snapshot["max_steps"] or scenario.command_interval != snapshot["command_interval"]
                 or scenario.opponent != snapshot["opponent"] or scenario.task_mode != snapshot["task_mode"]
                 or scenario_health != snapshot["target_health"] or scenario_horizon != snapshot["horizon_policy"]
-                or scenario.spatial_dim != snapshot["spatial_dim"] or scenario_altitude != snapshot["plane_altitude"]):
+                or scenario.spatial_dim != snapshot["spatial_dim"] or scenario_altitude != snapshot["plane_altitude"]
+                or scenario.env_agent_type != snapshot["env_agent_type"]
+                or scenario.env_agent_action_type != snapshot["env_agent_action_type"]
+                or effective.to_dict() != snapshot["effective_config"]):
             raise ValueError("Scenario and portable snapshot protocols differ")
         if snapshot["done"]:
             raise ValueError("Cannot continue a terminal snapshot")

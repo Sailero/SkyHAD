@@ -30,6 +30,13 @@ def parser():
         p.add_argument("--opponent-seed", type=int, default=20260908)
         p.add_argument("--policy", default="rule", choices=("rule", "grand", "static_rule", "random"))
         p.add_argument("--scenario", type=Path, help="ScenarioSpec JSON")
+        p.add_argument("--config", type=Path, help="Environment geometry/configuration JSON")
+        p.add_argument("--agent-type", "--env-agent-type", dest="env_agent_type",
+                       choices=("particle", "UAV_fixedwing", "UAV_quadrotor"))
+        p.add_argument("--agent-action-type", "--env-agent-action-type", dest="env_agent_action_type",
+                       choices=("acceleration", "actuator", "position"))
+        p.add_argument("--spatial-dim", type=int, choices=(2, 3))
+        p.add_argument("--action-mode", choices=("discrete27", "continuous_native"))
         p.add_argument("--native", action="store_true", help="原生双方飞行协议；默认固定对手动态分组")
         p.add_argument("--scouts", type=int, default=0, help="原生协议下每方侦察机数量")
         p.add_argument("--disturbers", type=int, default=0, help="原生协议下每方干扰机数量")
@@ -67,16 +74,28 @@ def _scenario(args):
         raise ValueError("--policy 用于上层分组协议；原生飞行自定义策略请通过 FlightSession 接入")
     if args.scenario:
         return json.loads(args.scenario.read_text(encoding="utf-8-sig"))
+    config = json.loads(args.config.read_text(encoding="utf-8-sig")) if args.config else None
+    configured = config or {}
+    model = args.env_agent_type or configured.get("env_agent_type", "particle")
+    action_type = args.env_agent_action_type or configured.get("env_agent_action_type", "acceleration")
+    spatial_dim = args.spatial_dim or configured.get("spatial_dim", 3)
     if args.native:
         from .agent_session import FlightScenarioSpec
         return asdict(FlightScenarioSpec(red_attackers=args.red, blue_attackers=args.blue, seed=args.seed,
                                         red_scouts=args.scouts, blue_scouts=args.scouts,
-                                        red_disturbers=args.disturbers, blue_disturbers=args.disturbers))
+                                        red_disturbers=args.disturbers, blue_disturbers=args.disturbers,
+                                        spatial_dim=spatial_dim, env_agent_type=model,
+                                        env_agent_action_type=action_type, env_config=config,
+                                        task_mode=configured.get("task_mode", "survival"),
+                                        action_mode=args.action_mode or ("discrete27" if action_type == "acceleration" else "continuous_native")))
     if args.scouts or args.disturbers:
         raise ValueError("异构编队使用 --native；固定分组协议的角色不变")
     from .protocols import ScenarioSpec
     return ScenarioSpec(red_count=args.red, blue_count=args.blue, opening_seed=args.seed,
-                        opponent_seed=args.opponent_seed).to_dict()
+                        opponent_seed=args.opponent_seed, spatial_dim=spatial_dim,
+                        env_agent_type=model, env_agent_action_type=action_type,
+                        task_mode=configured.get("task_mode", "survival"),
+                        env_config=config).to_dict()
 
 
 def reconstruct_branch(episode, step, *, policy="grand", seed=20260909):
@@ -134,6 +153,7 @@ def _show(args):
     app.setApplicationName("HAD Research Workbench")
     window = WorkbenchWindow()
     controller = None
+    live_timer = None
     timers = []
     branch_jobs = []
 
@@ -192,18 +212,25 @@ def _show(args):
         timers.append(timer)
     window.control_requested.connect(saved_branch)
     app.aboutToQuit.connect(lambda: [job.close() for job in branch_jobs])
-    if args.command == "live":
+    def control(action):
+        if controller is None or (action == "branch" and not window.live_mode):
+            return
+        if action.startswith("speed:"):
+            controller.send("speed", value=float(action.split(":", 1)[1]))
+        else:
+            controller.send(action)
+    window.control_requested.connect(control)
+
+    def start_live(scenario, *, native=False, save_path=None):
+        nonlocal controller, live_timer
         from .live import LiveController
-        controller = LiveController(_scenario(args), args.policy, native=args.native, save_path=str(args.output))
+        if live_timer is not None:
+            live_timer.stop()
+        if controller is not None:
+            controller.close()
+        output = save_path or (WORKBENCH_ROOT / "outputs/workbench" / f"flight_{datetime.now():%Y%m%d_%H%M%S_%f}.json.gz")
+        controller = LiveController(scenario, "rule" if native else args.policy, native=native, save_path=str(output))
         window.set_live_mode(True)
-        def control(action):
-            if action == "branch" and not window.live_mode:
-                return
-            if action.startswith("speed:"):
-                controller.send("speed", value=float(action.split(":", 1)[1]))
-            else:
-                controller.send(action)
-        window.control_requested.connect(control)
         def poll():
             for row in controller.poll():
                 kind = row["kind"]
@@ -220,7 +247,7 @@ def _show(args):
                         window.append_episode(episode)
                         window.set_live_mode(kind != "complete")
                     if kind == "complete":
-                        window.statusBar().showMessage(f"回合完成，已保存到 {args.output}")
+                        window.statusBar().showMessage(f"回合完成，已保存到 {output}")
                 elif kind == "frame":
                     window.append_frame(row["frame"])
                 elif kind == "notice":
@@ -237,7 +264,11 @@ def _show(args):
         timer.timeout.connect(poll)
         timer.start()
         timers.append(timer)
-        app.aboutToQuit.connect(controller.close)
+        live_timer = timer
+    window.flight_requested.connect(lambda scenario: start_live(scenario, native=True))
+    app.aboutToQuit.connect(lambda: controller.close() if controller is not None else None)
+    if args.command == "live":
+        start_live(_scenario(args), native=args.native, save_path=args.output)
     else:
         for path in args.episodes:
             window.add_episode(path)

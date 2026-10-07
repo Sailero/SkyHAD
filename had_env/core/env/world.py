@@ -28,6 +28,8 @@ class World:
         from had_env.config import EnvConfig
         self.effective_config = effective_config or EnvConfig(spatial_dim=spatial_dim,
             task_mode=task_mode, plane_altitude=plane_altitude)
+        spatial_dim = self.effective_config.spatial_dim
+        task_mode = self.effective_config.task_mode
         self.env_agent_type = self.effective_config.env_agent_type
         self.env_agent_action_type = self.effective_config.env_agent_action_type
         self.scene_scale = self.effective_config.scene_scale

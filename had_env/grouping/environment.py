@@ -22,19 +22,31 @@ class KnownOpponentEnv:
     always executes at least one physical step.
     """
 
-    def __init__(self, red=8, blue=8, max_steps=100, opponent="reactive", seed=0,
-                 command_interval=5, executor=None, group_max_size=None,
-                 targets=2, target_positions=None, horizon_policy="red_win",
-                 task_mode="survival", target_health=None, spatial_dim=None, plane_altitude=None,
-                 env_agent_type="particle", env_agent_action_type="acceleration", config=None):
+    def __init__(self, red=None, blue=None, max_steps=None, opponent=None, seed=None,
+                 command_interval=None, executor=None, group_max_size=None,
+                 targets=None, target_positions=None, horizon_policy=None,
+                 task_mode=None, target_health=None, spatial_dim=None, plane_altitude=None,
+                 env_agent_type=None, env_agent_action_type=None, config=None):
         from had_env.config import EnvConfig, load_config
         values = load_config(config)
+        def resolve(name, explicit, default, alias=None):
+            return explicit if explicit is not None else values.get(name, values.get(alias, default))
+        red = resolve('red', red, 8, 'red_count')
+        blue = resolve('blue', blue, 8, 'blue_count')
+        max_steps = resolve('max_steps', max_steps, 100, 'max_cycles')
+        opponent = resolve('opponent', opponent, 'reactive')
+        seed = resolve('seed', seed, 0)
+        command_interval = resolve('command_interval', command_interval, 5)
+        targets = resolve('targets', targets, 2, 'target_count')
+        target_positions = resolve('target_positions', target_positions, None)
+        horizon_policy = resolve('horizon_policy', horizon_policy, 'red_win')
+        target_health = resolve('target_health', target_health, None)
+        env_agent_type = resolve('env_agent_type', env_agent_type, 'particle')
+        env_agent_action_type = resolve('env_agent_action_type', env_agent_action_type, 'acceleration')
+        task_mode = resolve('task_mode', task_mode, 'survival')
         values.update(env_agent_type=env_agent_type, env_agent_action_type=env_agent_action_type,
                       task_mode=task_mode)
-        if spatial_dim is not None:
-            values['spatial_dim'] = spatial_dim
-        else:
-            values.setdefault('spatial_dim', 2 if env_agent_type == 'particle' else 3)
+        values['spatial_dim'] = resolve('spatial_dim', spatial_dim, 2 if env_agent_type == 'particle' else 3)
         if plane_altitude is not None:
             values['plane_altitude'] = plane_altitude
         effective = EnvConfig.from_values(values)

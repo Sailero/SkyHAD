@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .playback import display_frame
+from had_env.core.render.glyphs import AIRPLANE, heading_angle, rotor_centers, rotate_points
 
 COLORS = {"red": "#ef6b73", "blue": "#55a7ed", "targets": "#dba940"}
 MARKERS = {"Attack": "o", "Scout": "^", "Disturb": "D", "Entity": "P"}
@@ -64,7 +65,7 @@ class EpisodeFigure:
             if len(points) > 1 and side != "targets":
                 self.map.plot(points[:, 0], points[:, 1], color=color, alpha=.27, linewidth=1)
             self.map.scatter([x], [y], c=color, s=85 if side == "targets" else 35,
-                             marker=MARKERS.get(entity.get("role"), "o"), zorder=4)
+                             marker=self._marker(entity), zorder=4)
             if entity.get("alive", True) and side != "targets":
                 vx, vy, _ = entity.get("velocity") or (0, 0, 0)
                 self.map.quiver(x, y, vx, vy, angles="xy", scale_units="xy", scale=1,
@@ -73,9 +74,11 @@ class EpisodeFigure:
                 self.map.annotate(f"{side[0].upper()}{entity['id']}", (x, y),
                                   xytext=(5, 5), textcoords="offset points", fontsize=8, color=self.ink)
             self.altitude.scatter([x], [z], c=color, s=24)
-        self.map.set(xlim=(-2500, 2500), ylim=(-2500, 2500), xlabel="x (m)", ylabel="y (m)")
+        from had_env.core.config import AeroPoint
+        bounds = meta.get("effective_config", {}).get("world_bounds", meta.get("world_bounds", AeroPoint))
+        self.map.set(xlim=bounds[0], ylim=bounds[1], xlabel="x (m)", ylabel="y (m)")
         self.map.set_aspect("equal", adjustable="box")
-        self.altitude.set(xlim=(-2500, 2500), ylim=(0, 1000), xlabel="x (m)", ylabel="height (m)")
+        self.altitude.set(xlim=bounds[0], ylim=bounds[2], xlabel="x (m)", ylabel="height (m)")
         for ax in (self.map, self.altitude):
             ax.grid(alpha=.15)
         for side in ("red", "blue"):
@@ -96,6 +99,21 @@ class EpisodeFigure:
                           va="top", color=self.ink, fontsize=10, linespacing=1.65)
         self.canvas.draw()
         return np.asarray(self.canvas.buffer_rgba())[:, :, :3].copy()
+
+    @staticmethod
+    def _marker(entity):
+        from matplotlib.path import Path as MarkerPath
+        model = entity.get("env_agent_type")
+        angle = -heading_angle(entity)
+        if model == "UAV_fixedwing":
+            points = rotate_points(AIRPLANE, angle)
+            return MarkerPath(points+[points[0]], [MarkerPath.MOVETO]+[MarkerPath.LINETO]*(len(points)-1)+[MarkerPath.CLOSEPOLY])
+        if model == "UAV_quadrotor":
+            from matplotlib.transforms import Affine2D
+            paths = [MarkerPath.unit_circle().transformed(Affine2D().scale(.3).translate(x, y))
+                     for x, y in rotor_centers(angle, size=1.)]
+            return MarkerPath.make_compound_path(*paths)
+        return MARKERS.get(entity.get("role"), "o")
 
     def close(self):
         self.figure.clear()

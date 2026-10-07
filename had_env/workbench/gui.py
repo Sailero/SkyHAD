@@ -79,6 +79,7 @@ class WorkbenchWindow(QMainWindow):
 
     control_requested = Signal(str)
     frame_changed = Signal(int)
+    flight_requested = Signal(dict)
 
     def __init__(self, episode: ReplayEpisode | None = None, parent=None):
         super().__init__(parent)
@@ -155,6 +156,44 @@ class WorkbenchWindow(QMainWindow):
         self.metadata_label = QLabel("尚未载入回合")
         self.metadata_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         info.addWidget(self.metadata_label)
+        self.addToolBarBreak()
+        flight = QToolBar("飞行会话", self)
+        flight.setMovable(False)
+        self.addToolBar(flight)
+        self.agent_type_combo, self.agent_action_combo, self.spatial_dim_combo = QComboBox(), QComboBox(), QComboBox()
+        self.agent_type_combo.addItems(["particle", "UAV_fixedwing", "UAV_quadrotor"])
+        self.agent_action_combo.addItems(["acceleration", "actuator", "position"])
+        self.spatial_dim_combo.addItems(["3", "2"])
+        for label, combo in (("机型", self.agent_type_combo), ("控制", self.agent_action_combo), ("维度", self.spatial_dim_combo)):
+            flight.addWidget(QLabel(label))
+            flight.addWidget(combo)
+        self.new_flight_button = QPushButton("新建飞行会话")
+        self.new_flight_button.clicked.connect(self._request_flight)
+        flight.addWidget(self.new_flight_button)
+        self.agent_type_combo.currentTextChanged.connect(self._flight_options)
+        self._flight_options()
+
+    def _flight_options(self):
+        uav = self.agent_type_combo.currentText() != "particle"
+        if uav:
+            self.spatial_dim_combo.setCurrentText("3")
+        self.spatial_dim_combo.setEnabled(not uav)
+        self.agent_action_combo.model().item(1).setEnabled(uav)
+        if not uav and self.agent_action_combo.currentText() == "actuator":
+            self.agent_action_combo.setCurrentText("acceleration")
+
+    def _request_flight(self):
+        from dataclasses import asdict
+        from .agent_session import FlightScenarioSpec
+        previous = self.episode.metadata.get("scenario", {}) if self.episode else {}
+        action = self.agent_action_combo.currentText()
+        scenario = FlightScenarioSpec(red_attackers=previous.get("red_attackers", previous.get("red_count", 4)),
+                                      blue_attackers=previous.get("blue_attackers", previous.get("blue_count", 4)),
+                                      seed=previous.get("seed", previous.get("opening_seed", 20260907)),
+                                      spatial_dim=int(self.spatial_dim_combo.currentText()),
+                                      env_agent_type=self.agent_type_combo.currentText(), env_agent_action_type=action,
+                                      action_mode="discrete27" if action == "acceleration" else "continuous_native")
+        self.flight_requested.emit(asdict(scenario))
 
     def _build_canvas(self):
         widget = QWidget()
@@ -354,7 +393,8 @@ class WorkbenchWindow(QMainWindow):
 
     def append_episode(self, episode: ReplayEpisode):
         """Replace a live snapshot without resetting camera, selection or time."""
-        if self.episode is None:
+        if self.episode is None or (episode.metadata.get("episode_id") is not None
+                                    and episode.metadata.get("episode_id") != self.episode.metadata.get("episode_id")):
             self.set_episode(episode)
         else:
             old_episode = self.episode

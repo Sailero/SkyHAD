@@ -15,6 +15,7 @@ from .wrapper import (
 from .rules import CoveragePolicy, CoverageExecutor, DirectActionPolicy, RED_RULE_VERSION
 
 PROVENANCE = "Open-SCORE open_score/envs, utils/seeding.py and rules/coverage_rule.py; native HAD physics"
+UPSTREAM_REVISION = "6f119e9904b9dfed9cb08b660aff078a2d82247d"
 
 
 def make_open_score_env(*, profile="evaluation", **kwargs):
@@ -42,5 +43,5 @@ __all__ = [
     "ENTITY_DIM", "FEATURE_NAMES", "N_ACTIONS", "PLANAR_NATIVE_IDS", "NATIVE_TO_PLANAR",
     "DecisionState", "Entity", "Group", "Grouping", "build_decision_state",
     "native_actions_to_planar", "EpisodeDiagnostics", "trajectory_frame",
-    "CoveragePolicy", "CoverageExecutor", "DirectActionPolicy", "RED_RULE_VERSION", "PROVENANCE",
+    "CoveragePolicy", "CoverageExecutor", "DirectActionPolicy", "RED_RULE_VERSION", "PROVENANCE", "UPSTREAM_REVISION",
 ]

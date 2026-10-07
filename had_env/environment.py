@@ -183,6 +183,13 @@ class HADParallelEnv(ParallelEnv):
             raise ValueError(f"{agent} action must be a finite {self.spatial_dim}-vector in [-1,1]")
         return value.tolist() + ([0.] if self.spatial_dim == 2 else [])
 
+    def _neutral_action(self, agent):
+        if self.env_agent_action_type == "actuator":
+            return [0.]*4
+        if self.env_agent_action_type == "position":
+            return list(self._entity(agent).position)
+        return [0.]*3
+
     def step(self, actions):
         if not self._has_reset or self._closed:
             raise RuntimeError("Call reset before stepping an uninitialized or closed environment")
@@ -193,11 +200,11 @@ class HADParallelEnv(ParallelEnv):
         acting = self.agents.copy()
         # Decode the complete joint action before touching physics or RNG.
         decoded = {
-            a: ([0., 0., 0.] if self.task_mode == "damage" and self._entity(a).Health <= 0
+            a: (self._neutral_action(a) if self.task_mode == "damage" and self._entity(a).Health <= 0
                 else self._decode_action(a, actions[a]))
             for a in acting
         }
-        batch = [decoded.get(a, [0., 0., 0.]) for a in self.possible_agents]
+        batch = [decoded.get(a, self._neutral_action(a)) for a in self.possible_agents]
         self.world.step_physics(batch)
         native_obs = self.scenario.observation(self.world)
         native_rewards = self.scenario.reward(self.world)
@@ -332,7 +339,7 @@ class MPEEnv:
             if a not in self.parallel_env.agents:
                 continue
             if self.parallel_env.task_mode == "damage" and self.parallel_env._entity(a).Health <= 0:
-                joint[a] = [0.] * self.parallel_env.spatial_dim if self.parallel_env.continuous else 0
+                joint[a] = self.parallel_env._neutral_action(a) if self.parallel_env.continuous else 0
                 continue
             array = np.asarray(value)
             action_count = self.parallel_env.action_space(a).n if isinstance(self.parallel_env.action_space(a), spaces.Discrete) else None

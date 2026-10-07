@@ -94,3 +94,11 @@ def test_primitive_zero_and_26_directions_have_stable_native_order():
     np.testing.assert_allclose(np.linalg.norm(ACCELERATION_PRIMITIVES[1:], axis=1), 1.0)
     np.testing.assert_allclose(ACCELERATION_PRIMITIVES[1], -np.ones(3) / np.sqrt(3))
     np.testing.assert_allclose(ACCELERATION_PRIMITIVES[-1], np.ones(3) / np.sqrt(3))
+
+
+def test_legacy_grouping_factory_resolves_config_before_omitted_defaults():
+    env = make_env(1, config={"max_steps": 7, "opponent": "balanced", "seed": 88})
+    try:
+        assert (env.max_steps, env.opponent, env.seed) == (7, "balanced", 88)
+    finally:
+        env.close()

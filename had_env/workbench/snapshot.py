@@ -14,15 +14,17 @@ from had_env.grouping.domain import Group, Grouping
 from had_env.core.version import PHYSICS_PROTOCOL
 from .identity import assert_behavior_compatible, source_identity
 
-SCHEMA = "had-workbench-snapshot-v2"
+SCHEMA = "had-workbench-snapshot-v3"
 _CLASSES = {cls.__name__: cls for cls in (HADStage3Snapshot, HADStage3Event, Grouping, Group)}
 _SNAPSHOT_KEYS = {"physical", "executor", "previous", "blue_grouping", "opponent_rng", "numpy_state",
                   "done", "opponent", "max_steps", "command_interval", "seed", "group_max_size", "executor_type",
-                  "task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude"}
+                  "task_mode", "target_health", "horizon_policy", "spatial_dim", "plane_altitude",
+                  "env_agent_type", "env_agent_action_type", "effective_config"}
 _ENTITY_KEYS = {"position", "initial_position", "velocity", "Health", "Id", "render_id", "Color", "Type",
                 "acceleration", "vMax", "vMin", "wMax", "aMax", "Boundary", "IsFire", "is_active_objective",
                 "pre_position", "_clamped_axes", "initial_health", "task_mode", "step_damage", "cumulative_damage",
-                "spatial_dim", "plane_altitude"}
+                "spatial_dim", "plane_altitude", "env_agent_type", "env_agent_action_type", "world_bounds", "scene_scale",
+                "rigid_state", "attitude", "angular_velocity", "attack_distance", "fire_range"}
 
 
 def _hash(value):
@@ -119,13 +121,19 @@ def _validate(snapshot):
         raise ValueError("Only the unbounded registered rule executor is supported")
     if physical.physics_protocol != PHYSICS_PROTOCOL:
         raise ValueError("Snapshot physics protocol differs; legacy snapshots cannot be resumed")
+    from had_env.config import EnvConfig
+    config = EnvConfig(**snapshot["effective_config"])
+    if (config.to_dict() != snapshot["effective_config"] or physical.effective_config != snapshot["effective_config"]
+            or config.env_agent_type != snapshot["env_agent_type"] or config.env_agent_action_type != snapshot["env_agent_action_type"]
+            or physical.env_agent_type != snapshot["env_agent_type"] or physical.env_agent_action_type != snapshot["env_agent_action_type"]
+            or config.spatial_dim != snapshot["spatial_dim"] or config.task_mode != snapshot["task_mode"]):
+        raise ValueError("Snapshot model, action or effective configuration differs")
     if snapshot["task_mode"] not in ("survival", "damage") or physical.task_mode != snapshot["task_mode"]:
         raise ValueError("Snapshot task modes differ")
     if type(snapshot["spatial_dim"]) is not int or snapshot["spatial_dim"] not in (2, 3) or physical.spatial_dim != snapshot["spatial_dim"]:
         raise ValueError("Snapshot spatial dimensions differ")
     altitude = float(snapshot["plane_altitude"])
-    from had_env.core.config import AeroPoint
-    if not math.isfinite(altitude) or not AeroPoint[2][0] <= altitude <= AeroPoint[2][1] or physical.plane_altitude != altitude:
+    if not math.isfinite(altitude) or not config.world_bounds[2][0] <= altitude <= config.world_bounds[2][1] or physical.plane_altitude != altitude:
         raise ValueError("Snapshot planar altitudes differ")
     target_health = float(snapshot["target_health"])
     if not math.isfinite(target_health) or target_health <= 0 or physical.target_health != target_health:
@@ -157,6 +165,15 @@ def _validate(snapshot):
                 raise ValueError("Entity position/velocity must be a finite xyz vector")
         if not np.isfinite(float(state["Health"])):
             raise ValueError("Entity health must be finite")
+        if (state.get("env_agent_type") != config.env_agent_type or state.get("env_agent_action_type") != config.env_agent_action_type
+                or state.get("scene_scale") != config.scene_scale or not np.array_equal(state.get("world_bounds"), config.world_bounds)):
+            raise ValueError("Entity model or effective configuration differs from snapshot")
+        if config.env_agent_type != "particle" and state["Type"] != "Entity":
+            rigid = np.asarray(state.get("rigid_state"), float)
+            if (rigid.shape != (13,) or not np.isfinite(rigid).all() or abs(np.linalg.norm(rigid[6:10])-1) > 1e-8
+                    or not np.array_equal(rigid[:3], state["position"]) or not np.array_equal(rigid[3:6], state["velocity"])
+                    or not np.array_equal(rigid[6:10], state.get("attitude")) or not np.array_equal(rigid[10:13], state.get("angular_velocity"))):
+                raise ValueError("Entity rigid state must be a synchronized finite 13-vector with unit attitude")
         if state["spatial_dim"] != physical.spatial_dim or state["plane_altitude"] != altitude:
             raise ValueError("Entity spatial configuration differs from snapshot")
         if physical.spatial_dim == 2 and (state["position"][2] != altitude or state["pre_position"][2] != altitude

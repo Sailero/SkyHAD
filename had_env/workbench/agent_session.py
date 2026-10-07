@@ -40,8 +40,11 @@ class FlightScenarioSpec:
     action_mode: str = "discrete27"
     task_mode: str = "survival"
     target_health: float | None = None
-    spatial_dim: int = 2
+    spatial_dim: int = 3
     plane_altitude: float | None = None
+    env_agent_type: str = "particle"
+    env_agent_action_type: str = "acceleration"
+    env_config: dict | None = None
 
     def __post_init__(self):
         for name in ("red_attackers", "blue_attackers", "targets", "max_steps"):
@@ -52,6 +55,16 @@ class FlightScenarioSpec:
                 raise ValueError(f"{name} must be a nonnegative integer")
         if self.action_mode not in ("discrete27", "continuous_native"):
             raise ValueError("Unknown flight action mode")
+        from had_env.config import EnvConfig, load_config
+        config = load_config(self.env_config)
+        config.update(env_agent_type=self.env_agent_type, env_agent_action_type=self.env_agent_action_type,
+                      spatial_dim=self.spatial_dim, task_mode=self.task_mode)
+        if self.plane_altitude is not None:
+            config["plane_altitude"] = self.plane_altitude
+        effective = EnvConfig.from_values(config)
+        object.__setattr__(self, "env_config", config or None)
+        if self.action_mode == "discrete27" and self.env_agent_action_type != "acceleration":
+            raise ValueError("discrete27 requires acceleration control; use continuous_native for actuator or position")
         if self.max_steps > 500:
             raise ValueError("max_steps must be in 1..500")
         if self.task_mode not in ("survival", "damage"):
@@ -59,9 +72,8 @@ class FlightScenarioSpec:
         if type(self.spatial_dim) is not int or self.spatial_dim not in (2, 3):
             raise ValueError("spatial_dim must be 2 or 3")
         if self.plane_altitude is not None:
-            from had_env.core.config import AeroPoint
             value = float(self.plane_altitude)
-            if not math.isfinite(value) or not AeroPoint[2][0] <= value <= AeroPoint[2][1]:
+            if not math.isfinite(value) or not effective.world_bounds[2][0] <= value <= effective.world_bounds[2][1]:
                 raise ValueError("plane_altitude must be finite and inside the world")
             object.__setattr__(self, "plane_altitude", value)
         if self.target_health is not None:
@@ -87,6 +99,7 @@ class FlightSession:
         from had_env.core.make_env import HADEnv
         from had_env.core.config import Interval
         from had_env.core.version import CORE_VERSION, PHYSICS_PROTOCOL
+        from had_env.config import EnvConfig
         self.scenario = scenario or FlightScenarioSpec()
         if isinstance(self.scenario, dict):
             self.scenario = FlightScenarioSpec(**self.scenario)
@@ -95,11 +108,13 @@ class FlightSession:
                           red_scout_n=s.red_scouts, red_disturb_n=s.red_disturbers,
                           blue_scout_n=s.blue_scouts, blue_disturb_n=s.blue_disturbers, seed=s.seed,
                           task_mode=s.task_mode, target_health=s.target_health,
-                          spatial_dim=s.spatial_dim, plane_altitude=s.plane_altitude)
+                          spatial_dim=s.spatial_dim, plane_altitude=s.plane_altitude,
+                          effective_config=EnvConfig.from_values(s.env_config))
         self.env.reset(seed=s.seed)
         from had_env.actions import ACCELERATION_PRIMITIVES
-        self.valid_action_ids = tuple(int(i) for i in range(len(ACCELERATION_PRIMITIVES))
+        self.valid_action_ids = (tuple(int(i) for i in range(len(ACCELERATION_PRIMITIVES))
                                       if s.spatial_dim == 3 or ACCELERATION_PRIMITIVES[i, 2] == 0)
+                                 if s.action_mode == "discrete27" else ())
         self.env.record_events = bool(record)
         self.step_count, self.done, self._closed = 0, False, False
         self._numpy_state = np.random.RandomState(s.seed).get_state()
@@ -128,6 +143,8 @@ class FlightSession:
             result[side] = dict(observation=copy.deepcopy(values[index:index + len(agents)]),
                                 agent_ids=[a.Id for a in agents], alive_mask=[a.Health > 0 for a in agents],
                                 task_mode=self.scenario.task_mode, spatial_dim=self.scenario.spatial_dim,
+                                env_agent_type=self.env.env_agent_type, env_agent_action_type=self.env.env_agent_action_type,
+                                action_bounds={"low": self.env.control_space.low.tolist(), "high": self.env.control_space.high.tolist()},
                                 action_mode=self.scenario.action_mode, valid_action_ids=self.valid_action_ids)
             index += len(agents)
         return result
@@ -141,7 +158,13 @@ class FlightSession:
                 raise ValueError(f"{side} action IDs must match the fixed roster")
             values = [values[a.Id] for a in agents]
         if values is None:
-            values = [0] * len(agents) if self.scenario.action_mode == "discrete27" else np.zeros((len(agents), 3))
+            if self.scenario.action_mode == "discrete27":
+                values = [0] * len(agents)
+            elif self.env.env_agent_action_type == "position":
+                values = [list(a.position) for a in agents]
+            else:
+                space = self.env.control_space
+                values = np.tile(np.clip(np.zeros(space.shape), space.low, space.high), (len(agents), 1))
         array = np.asarray(values)
         if self.scenario.action_mode == "discrete27":
             if array.shape != (len(agents),) or not np.issubdtype(array.dtype, np.integer):
@@ -151,12 +174,16 @@ class FlightSession:
             if self.scenario.spatial_dim == 2 and np.any(ACCELERATION_PRIMITIVES[array, 2] != 0):
                 raise ValueError(f"Planar flight accepts only these global action IDs: {self.valid_action_ids}")
             return ACCELERATION_PRIMITIVES[array].tolist()
-        if self.scenario.spatial_dim == 2 and array.shape == (len(agents), 2):
+        expected = 3 if self.env.env_agent_action_type == "acceleration" else self.env.control_space.shape[0]
+        if self.scenario.spatial_dim == 2 and self.env.env_agent_action_type == "acceleration" and array.shape == (len(agents), 2):
             array = np.column_stack((array, np.zeros(len(agents))))
-        if array.shape != (len(agents), 3) or not np.isfinite(array.astype(float)).all():
-            raise ValueError(f"{side} requires finite Nx3 native accelerations")
+            expected = 3
+        if array.shape != (len(agents), expected) or not np.isfinite(array.astype(float)).all():
+            raise ValueError(f"{side} requires finite Nx{expected} native {self.env.env_agent_action_type} controls")
         array = array.astype(float)
-        if self.scenario.spatial_dim == 2:
+        if self.env.env_agent_action_type != "acceleration" and (np.any(array < self.env.control_space.low) or np.any(array > self.env.control_space.high)):
+            raise ValueError(f"{side} controls must stay within the native action Box")
+        if self.scenario.spatial_dim == 2 and self.env.env_agent_action_type == "acceleration":
             array[:, 2] = 0.
         return array.tolist()
 
@@ -220,6 +247,11 @@ class FlightSession:
                                  attack_range=self.env.attack_distance[1] if e.Type == "Attack" else None))
                 if side == "targets":
                     rows[-1].update(step_damage=float(e.step_damage), cumulative_damage=float(e.cumulative_damage))
+                else:
+                    rows[-1].update(env_agent_type=self.env.env_agent_type)
+                    if getattr(e, "rigid_state", None) is not None:
+                        rows[-1].update(rigid_state=e.rigid_state.tolist(), attitude=list(e.attitude),
+                                        angular_velocity=list(e.angular_velocity))
         return dict(step=self.step_count, sim_time=self.step_count * Interval, entities=rows,
                     groups={"red": [], "blue": []}, assignments={"red": {}, "blue": {}},
                     events=copy.deepcopy(self.env.last_physics_events), actions=actions or {"red": {}, "blue": {}},
@@ -233,12 +265,16 @@ class FlightSession:
         return self.recorder.episode
 
     def snapshot(self):
-        return copy.deepcopy(dict(scenario=asdict(self.scenario), entities=[e.__dict__ for e in self.env.world],
+        return copy.deepcopy(dict(scenario=asdict(self.scenario),
+                                  entities=[{k:v for k,v in e.__dict__.items() if k not in
+                                             ("dynamics", "_next_rigid_state", "_next_clamped_axes")} for e in self.env.world],
                                   rng=self.env.np_random.bit_generator.state, numpy=self._numpy_state,
                                   step=self.step_count, done=self.done, policies=self.policies,
                                   episode=self.recorder.episode, task_mode=self.env.task_mode,
                                   target_health=self.env.target_health, physics_protocol=self.env.physics_protocol,
                                   spatial_dim=self.env.spatial_dim, plane_altitude=self.env.plane_altitude,
+                                  effective_config=self.env.effective_config.to_dict(),
+                                  env_agent_type=self.env.env_agent_type, env_agent_action_type=self.env.env_agent_action_type,
                                   last_physics_events=self.env.last_physics_events, boundary_clips=self.env.boundary_clips,
                                   entity_mask=self.env.entity_mask, record_events=self.env.record_events))
 
@@ -252,9 +288,14 @@ class FlightSession:
                 or saved.get("plane_altitude") != self.env.plane_altitude):
             raise ValueError("Flight snapshot task or physics protocol differs; legacy snapshots cannot be resumed")
         following = FlightSession(self.scenario)
+        if saved.get("effective_config") != following.env.effective_config.to_dict():
+            following.close()
+            raise ValueError("Flight snapshot model, action or effective configuration differs")
         for e, state in zip(following.env.world, saved["entities"]):
+            dynamics = getattr(e, "dynamics", None)
             e.__dict__.clear()
             e.__dict__.update(state)
+            e.dynamics = dynamics
         following.env.np_random.bit_generator.state = saved["rng"]
         following._numpy_state = saved["numpy"]
         following.step_count = following.env.physics_step_count = saved["step"]

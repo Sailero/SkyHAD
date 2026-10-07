@@ -9,7 +9,9 @@
       "rules/coverage_rule.py",
       "utils/seeding.py"
     ],
-    "capture": "Literal output from original upstream modules loaded under package stubs excluding unrelated learners; physics imported from identical native HAD worktree baseline."
+    "capture": "Literal output from original upstream modules loaded under package stubs excluding unrelated learners; physics imported from identical native HAD worktree baseline.",
+    "upstream_revision": "6f119e9904b9dfed9cb08b660aff078a2d82247d",
+    "capture_date": "2026-10-08"
   },
   "planar_native_ids": [
     0,

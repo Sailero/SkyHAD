@@ -14,7 +14,8 @@ def test_recorded_session_matches_native_grouping_every_transition():
     reference = make_env(spec.red_count, spec.blue_count, opponent=spec.opponent,
                          seed=spec.opening_seed, max_steps=spec.max_steps,
                          command_interval=spec.command_interval,
-                         targets=len(spec.target_positions), target_positions=spec.target_positions)
+                         targets=len(spec.target_positions), target_positions=spec.target_positions,
+                         spatial_dim=spec.spatial_dim, plane_altitude=spec.plane_altitude)
     reference.reset(seed=spec.opening_seed)
     reference.set_rng(spec.opponent_seed)
     try:

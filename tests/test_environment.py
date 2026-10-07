@@ -220,3 +220,19 @@ def test_public_import_is_headless_without_research_dependencies():
 def test_invalid_configuration(kwargs):
     with pytest.raises(ValueError):
         make_env(**kwargs)
+
+
+@pytest.mark.parametrize("task", ["survival", "damage"])
+@pytest.mark.parametrize("control", ["actuator", "position"])
+def test_native_box_controls_keep_valid_fixed_slots_after_agent_death(task, control):
+    env = make_env(env_agent_type="UAV_quadrotor", env_agent_action_type=control,
+                   task_mode=task, red_count=1, blue_count=1, max_cycles=3)
+    env.reset(seed=17)
+    env.world.red_agents[0].Health = 0
+    for _ in range(2):
+        actions = {a: ([.4]*4 if control == "actuator" else env._entity(a).position)
+                   for a in env.agents}
+        obs, _, _, _, _ = env.step(actions)
+        assert env.state_space.contains(env.state())
+        assert all(env.observation_space(a).contains(row) for a, row in obs.items())
+    env.close()

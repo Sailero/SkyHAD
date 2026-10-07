@@ -144,15 +144,23 @@ class RuleExecutor:
         return result
 
 
-def make_env(red, blue=None, opponent='reactive', seed=0, max_steps=100,
-             command_interval=5, targets=2, target_positions=None, **kwargs):
-    from had_env.scenarios.presets import PRESETS
+def make_env(red, blue=None, opponent=None, seed=None, max_steps=None,
+             command_interval=None, targets=None, target_positions=None, **kwargs):
     executor = kwargs.pop('executor', None)
-    if executor is None:
-        executor = RuleExecutor(kwargs.pop('lookahead', 2.0), kwargs.pop('guard_distance', 700.0*PRESETS[kwargs.get('env_agent_type', 'particle')].scene_scale))
+    if executor is None and ('lookahead' in kwargs or 'guard_distance' in kwargs):
+        from had_env.config import EnvConfig, load_config
+        values = load_config(kwargs.get('config'))
+        values.update({k:v for k,v in kwargs.items() if k != 'config'})
+        effective = EnvConfig.from_values(values)
+        executor = RuleExecutor(kwargs.pop('lookahead', 2.0),
+                                kwargs.pop('guard_distance', 700.0*effective.scene_scale))
     # Device has no effect on the pure deterministic rule lower controller.
     kwargs.pop('device', None)
-    return KnownOpponentEnv(red=red, blue=red if blue is None else blue,
+    if blue is None:
+        from had_env.config import load_config
+        values = load_config(kwargs.get('config'))
+        blue = values.get('blue', values.get('blue_count', red))
+    return KnownOpponentEnv(red=red, blue=blue,
                             opponent=opponent, seed=seed, max_steps=max_steps,
                             command_interval=command_interval, executor=executor,
                             group_max_size=None, targets=targets,

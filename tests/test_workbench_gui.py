@@ -173,3 +173,43 @@ def test_click_select_and_close_observer_do_not_stop_owner(window, app):
     window.close()
     assert actions == []
     assert not window.timer.isActive()
+
+
+def test_view_and_scientific_export_use_recorded_world_bounds(window):
+    from had_env.workbench.export import EpisodeFigure
+    episode = recording()
+    episode.metadata["effective_config"] = {"world_bounds": [[-400, 400], [-400, 400], [0, 400]]}
+    window.set_episode(episode)
+    rect = window.xy_view._world_rect
+    assert rect.left() <= -400 and rect.right() >= 400
+    assert rect.width() < 1500
+    figure = EpisodeFigure(episode, width=640, height=480)
+    try:
+        figure.draw(episode.frames[0])
+        assert figure.map.get_xlim() == (-400., 400.)
+        assert figure.map.get_ylim() == (-400., 400.)
+        assert figure.altitude.get_ylim() == (0., 400.)
+    finally:
+        figure.close()
+
+
+def test_gui_can_request_a_quadrotor_actuator_flight_session(window):
+    requested = []
+    window.flight_requested.connect(requested.append)
+    window.agent_type_combo.setCurrentText("UAV_quadrotor")
+    window.agent_action_combo.setCurrentText("actuator")
+    window.new_flight_button.click()
+    assert requested[0]["env_agent_type"] == "UAV_quadrotor"
+    assert requested[0]["env_agent_action_type"] == "actuator"
+    assert requested[0]["spatial_dim"] == 3
+    assert requested[0]["action_mode"] == "continuous_native"
+
+
+def test_new_live_episode_refits_camera_to_its_model_bounds(window):
+    episode = recording()
+    episode.frames = episode.frames[:1]
+    episode.metadata.update(episode_id="new_quadrotor", effective_config={"world_bounds": [[-400, 400], [-400, 400], [0, 400]]})
+    window.seek(7)
+    window.append_episode(episode)
+    assert window.xy_view._world_rect.width() < 1500
+    assert window.position == 0

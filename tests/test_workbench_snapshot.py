@@ -51,7 +51,7 @@ def test_initial_snapshot_and_branch_of_recorded_branch_resume_exactly(tmp_path)
                 assert reopened.episode.frames[-1]["entities"] == loaded.frame_at(actual.state.step)["entities"]
                 with reopened.branch(934) as nested:
                     assert nested.state.to_dict() == reopened.state.to_dict()
-                    assert nested.episode.metadata["initial_snapshot"]["schema"] == "had-workbench-snapshot-v1"
+                    assert decode_snapshot(nested.episode.metadata["initial_snapshot"])["physical"].step_count == reopened.state.step
 
 
 def test_snapshot_rejects_source_changes_executable_types_and_tampering():
@@ -85,3 +85,52 @@ def test_snapshot_cannot_encode_an_unregistered_class_with_a_trusted_name():
     impostor = make_dataclass("HADStage3Snapshot", [("value", int)])
     with pytest.raises(ValueError, match="Unregistered snapshot dataclass"):
         encode_snapshot({"physical": impostor(123)})
+
+
+@pytest.mark.parametrize("model", ["UAV_fixedwing", "UAV_quadrotor"])
+def test_uav_portable_snapshot_restores_identical_rigid_trajectories_and_rejects_config_mismatch(model):
+    from had_env.workbench.protocols import ScenarioSpec, CUSTOM_PROTOCOL
+    scenario = ScenarioSpec(red_count=2, blue_count=2, max_steps=4, command_interval=1,
+                            protocol_id=CUSTOM_PROTOCOL, env_agent_type=model)
+    with SimulationSession(scenario) as session:
+        session.step()
+        document = json.loads(json.dumps(encode_snapshot(session.snapshot())))
+        restored = decode_snapshot(document)
+        row = restored["physical"].entity_states[0]
+        assert row["rigid_state"].shape == (13,)
+        with SimulationSession.from_snapshot(document, scenario) as branch:
+            while not session.done:
+                action = rule_grouping(session.state)
+                session.step(action)
+                branch.step(action)
+                assert branch.episode.frames[-1]["entities"] == session.episode.frames[-1]["entities"]
+        restored["effective_config"]["scene_scale"] *= 2
+        with pytest.raises(ValueError, match="configuration|config"):
+            decode_snapshot(encode_snapshot(restored))
+
+
+def test_uav_collision_snapshot_keeps_dead_native_and_rigid_velocities_synchronized():
+    from had_env.workbench.protocols import ScenarioSpec, CUSTOM_PROTOCOL
+    scenario = ScenarioSpec(red_count=2, blue_count=2, max_steps=5, command_interval=1,
+                            protocol_id=CUSTOM_PROTOCOL, env_agent_type="UAV_fixedwing")
+    with SimulationSession(scenario) as session:
+        world = session.env.adapter.env
+        world.agents[0].reset([-15., 0., 100.], [30., 0., 0.])
+        world.agents[1].reset([-500., 500., 100.], [30., 0., 0.])
+        world.agents[2].reset([15., 0., 100.], [-30., 0., 0.])
+        world.agents[3].reset([500., -500., 100.], [-30., 0., 0.])
+        session.step()
+        assert world.agents[0].Health == world.agents[2].Health == 0
+        assert any(e["kind"] == "collision" for e in world.last_physics_events)
+        assert not session.done
+        document = encode_snapshot(session.snapshot())
+        restored = decode_snapshot(document)
+        for index in (0, 2):
+            state = restored["physical"].entity_states[index]
+            np.testing.assert_array_equal(state["rigid_state"][3:6], [0., 0., 0.])
+            np.testing.assert_array_equal(state["velocity"], [0., 0., 0.])
+        with SimulationSession.from_snapshot(document, scenario) as branch:
+            action = rule_grouping(session.state)
+            session.step(action)
+            branch.step(action)
+            assert branch.episode.frames[-1]["entities"] == session.episode.frames[-1]["entities"]

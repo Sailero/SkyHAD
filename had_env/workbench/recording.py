@@ -61,6 +61,11 @@ def capture_frame(adapter, *, groups=None, info=None):
                 target = adapter.env.targets[entity_id]
                 entity.update(step_damage=float(target.step_damage), cumulative_damage=float(target.cumulative_damage))
             entity["attack_range"] = adapter.env.attack_distance[1] if entity["role"] == "Attack" else None
+            if side != "targets":
+                entity["env_agent_type"] = adapter.env.env_agent_type
+                for name in ("rigid_state", "attitude", "angular_velocity"):
+                    if name in row:
+                        entity[name] = serializable(row[name])
             entities.append(entity)
     native_events = copy.deepcopy(getattr(adapter.env, "last_physics_events", []))
     events = [{**event, "phase": "physics"} for event in native_events]

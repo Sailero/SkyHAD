@@ -55,11 +55,64 @@ def test_native_heterogeneous_two_sided_actions_and_branch():
         session.step()
 
 
+@pytest.mark.parametrize("model", ["UAV_fixedwing", "UAV_quadrotor"])
+@pytest.mark.parametrize("mode", ["acceleration", "actuator", "position"])
+def test_native_uav_modes_record_rigid_state_and_branch_exactly(model, mode):
+    session = FlightSession(FlightScenarioSpec(red_attackers=1, blue_attackers=1, max_steps=3,
+                            env_agent_type=model, env_agent_action_type=mode, action_mode="continuous_native"))
+    try:
+        row = session.recorder.episode.frames[0]["entities"][0]
+        assert row["env_agent_type"] == model and len(row["rigid_state"]) == 13
+        assert session.recorder.episode.metadata["effective_config"]["env_agent_action_type"] == mode
+        session.step()
+        child = session.branch()
+        try:
+            assert session.run().frames == child.run().frames
+        finally:
+            child.close()
+    finally:
+        session.close()
+
+
+def test_cli_selects_spatial_model_and_native_box_mode():
+    from had_env.workbench.cli import parser, _scenario
+    args = parser().parse_args(["record", "--native", "--agent-type", "UAV_quadrotor",
+                              "--agent-action-type", "actuator"])
+    value = _scenario(args)
+    assert value["spatial_dim"] == 3
+    assert value["env_agent_type"] == "UAV_quadrotor"
+    assert value["env_agent_action_type"] == "actuator"
+    assert value["action_mode"] == "continuous_native"
+    planar = _scenario(parser().parse_args(["record", "--native", "--spatial-dim", "2"]))
+    assert planar["spatial_dim"] == 2
+
+
+def test_planar_native_box_accepts_xyz_or_xy_acceleration():
+    session = FlightSession(FlightScenarioSpec(red_attackers=1, blue_attackers=1, spatial_dim=2,
+                                              action_mode="continuous_native"))
+    try:
+        session.step({"red": [[.2, .1, 0]], "blue": [[.1, -.1]]})
+        assert session.env.red_agents[0].velocity[2] == 0
+    finally:
+        session.close()
+
+
+def test_cli_configuration_file_selects_model_and_action_without_default_overrides(tmp_path):
+    from had_env.workbench.cli import parser, _scenario
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"env_agent_type": "UAV_quadrotor", "env_agent_action_type": "actuator", "spatial_dim": 3}))
+    scenario = _scenario(parser().parse_args(["record", "--native", "--config", str(path)]))
+    assert scenario["env_agent_type"] == "UAV_quadrotor"
+    assert scenario["env_agent_action_type"] == "actuator"
+    assert scenario["action_mode"] == "continuous_native"
+
+
 def test_two_policies_receive_precommit_observations_without_engine_access():
     seen = []
     class Policy:
         def act(self, obs):
-            assert set(obs) == {"observation", "agent_ids", "alive_mask"}
+            assert {"observation", "agent_ids", "alive_mask"} <= set(obs)
+            assert not {"env", "engine", "rng"} & set(obs)
             seen.append(copy.deepcopy(obs))
             obs["observation"].clear()
             return [0] * len(obs["agent_ids"])
@@ -110,6 +163,24 @@ def test_display_interpolation_never_changes_health_events_or_original_recording
     assert episode.frames[0] == a
     episode.sparse = True
     assert display_frame(episode, .5) == a
+
+
+def test_uav_playback_slerps_attitude_and_keeps_recorded_rigid_state_immutable():
+    q0 = [1., 0., 0., 0.]
+    q1 = [0., 0., 0., 1.]
+    def frame(step, x, quaternion):
+        return dict(step=step, entities=[dict(id=0, side="red", alive=True, position=[x, 0, 0],
+                    attitude=quaternion, rigid_state=[x, 0, 0, 2, 0, 0, *quaternion, 0, 0, 1])])
+    episode = ReplayEpisode({}, [frame(0, 0, q0), frame(1, 10, q1)], [])
+    original = copy.deepcopy(episode.to_dict())
+    row = display_frame(episode, .5)["entities"][0]
+    np.testing.assert_allclose(row["attitude"], [2**-.5, 0, 0, 2**-.5], atol=1e-15)
+    np.testing.assert_allclose(row["rigid_state"][6:10], row["attitude"])
+    assert row["rigid_state"][:3] == [5., 0., 0.]
+    assert episode.to_dict() == original
+    # Opposite quaternion signs represent the same orientation.
+    episode.frames[1]["entities"][0]["attitude"] = [-1., 0., 0., 0.]
+    np.testing.assert_allclose(display_frame(episode, .5)["entities"][0]["attitude"], q0)
 
 
 def test_viewer_edits_change_provenance_without_claiming_new_physics(tmp_path):

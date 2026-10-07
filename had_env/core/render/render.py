@@ -4,6 +4,7 @@ from had_env.core.config import *
 from pathlib import Path
 
 import math
+from .glyphs import airplane_points, heading_angle, rotor_centers
 
 
 def draw_isosceles_triangle(screen, size, center, angle=0., color=(255, 0, 0), top_angle=45):
@@ -164,7 +165,20 @@ class DisplayPlayer:
                         self.interaction_width_range[1] + get_area_point(self.interaction_height_range, agent_pz)]
             angle_z = np.pi / 2 if agent_vz < 0 else - np.pi / 2
 
-            if agent_info["type"] == "Attack":
+            model = agent_info.get("env_agent_type", "particle")
+            if model in ("UAV_fixedwing", "UAV_quadrotor"):
+                for projection, location, glyph_size in (("xy", center, size), ("xz", center_z, size / 2)):
+                    orientation = heading_angle(agent_info, projection)
+                    if model == "UAV_fixedwing":
+                        pygame.draw.polygon(surface, draw_agent_color, airplane_points(orientation, glyph_size, location))
+                    else:
+                        rotors = rotor_centers(orientation, glyph_size, location)
+                        pygame.draw.line(surface, draw_agent_color, rotors[0], rotors[2], 2)
+                        pygame.draw.line(surface, draw_agent_color, rotors[1], rotors[3], 2)
+                        for rotor in rotors:
+                            pygame.draw.circle(surface, draw_agent_color, rotor, max(2, int(glyph_size*.3)), 1)
+                        pygame.draw.circle(surface, draw_agent_color, location, max(2, int(glyph_size*.2)))
+            elif agent_info["type"] == "Attack":
                 pygame.draw.circle(surface, draw_agent_color, center, int(size))
                 pygame.draw.circle(surface, draw_agent_color, center_z, int(size / 2))
             elif agent_info["type"] == "Disturb":

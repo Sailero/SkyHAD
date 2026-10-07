@@ -183,6 +183,10 @@ class BaseAgent(Entity):
             self.Health = np.max([0, self.Health - attack_health_loss - disturb_health_loss])
         else:
             self.velocity = [0] * EnvDim
+            self._clamped_axes = []
+            if getattr(self, 'dynamics', None) is not None:
+                self.rigid_state[3:6] = 0.
+                self._sync_rigid_state()
 
     def update_position(self):
         if self.Color == "Entity":

@@ -57,12 +57,15 @@ class ScenarioSpec:
     opponent: str = "reactive"
     max_steps: int = 50
     command_interval: int = 5
-    target_positions: tuple[tuple[float, float, float], ...] = DEFAULT_TARGETS
+    target_positions: tuple[tuple[float, float, float], ...] | None = None
     task_mode: str = "survival"
     target_health: float | None = None
     horizon_policy: str | None = None
-    spatial_dim: int = 2
+    spatial_dim: int = 3
     plane_altitude: float | None = None
+    env_agent_type: str = "particle"
+    env_agent_action_type: str = "acceleration"
+    env_config: dict | None = None
 
     def __post_init__(self):
         for name in ("red_count", "blue_count", "opening_seed", "opponent_seed", "max_steps", "command_interval"):
@@ -84,9 +87,17 @@ class ScenarioSpec:
             raise ValueError("task_mode must be survival or damage")
         if type(self.spatial_dim) is not int or self.spatial_dim not in (2, 3):
             raise ValueError("spatial_dim must be 2 or 3")
-        from had_env.core.config import AeroPoint, PlanarAltitude
-        altitude = float(PlanarAltitude if self.plane_altitude is None else self.plane_altitude)
-        if not math.isfinite(altitude) or not AeroPoint[2][0] <= altitude <= AeroPoint[2][1]:
+        from had_env.config import EnvConfig, load_config
+        config = load_config(self.env_config)
+        config.update(env_agent_type=self.env_agent_type, env_agent_action_type=self.env_agent_action_type,
+                      spatial_dim=self.spatial_dim, task_mode=self.task_mode)
+        if self.plane_altitude is not None:
+            config["plane_altitude"] = self.plane_altitude
+        effective = EnvConfig.from_values(config)
+        if self.env_agent_action_type != "acceleration":
+            raise ValueError("Grouping sessions use acceleration intentions; actuator and position controls require FlightSession")
+        altitude = effective.plane_altitude
+        if not math.isfinite(altitude) or not effective.world_bounds[2][0] <= altitude <= effective.world_bounds[2][1]:
             raise ValueError("plane_altitude must be finite and inside the world")
         if self.plane_altitude is not None:
             object.__setattr__(self, "plane_altitude", altitude)
@@ -101,6 +112,8 @@ class ScenarioSpec:
             object.__setattr__(self, "protocol_id", DAMAGE_PROTOCOL)
         if self.spatial_dim == 2 and self.protocol_id == VERSION:
             object.__setattr__(self, "protocol_id", CUSTOM_PROTOCOL)
+        if self.protocol_id == VERSION and (self.env_agent_type != "particle" or self.env_config):
+            object.__setattr__(self, "protocol_id", CUSTOM_PROTOCOL)
         if (self.task_mode == "damage") != (self.protocol_id == DAMAGE_PROTOCOL):
             raise ValueError("Damage mode requires the registered damage protocol")
         ProtocolSpec(self.protocol_id)
@@ -108,10 +121,12 @@ class ScenarioSpec:
             raise ValueError("Unsupported frozen opponent")
         if not 1 <= self.max_steps <= 500 or not 1 <= self.command_interval <= 500:
             raise ValueError("Physical horizon and command interval must be in 1..500")
-        points = tuple(tuple(float(x) for x in point) for point in self.target_positions)
-        from had_env.core.config import AeroPoint
+        positions = self.target_positions
+        if positions is None:
+            positions = tuple(tuple(x*effective.scene_scale for x in point) for point in DEFAULT_TARGETS)
+        points = tuple(tuple(float(x) for x in point) for point in positions)
         if not points or any(len(p) != 3 or any(not math.isfinite(x) or not low <= x <= high
-                             for x, (low, high) in zip(p, AeroPoint)) for p in points):
+                             for x, (low, high) in zip(p, effective.world_bounds)) for p in points):
             raise ValueError("Targets must have finite xyz positions inside the native world")
         if self.spatial_dim == 2:
             points = tuple((point[0], point[1], altitude) for point in points)
@@ -130,6 +145,9 @@ class ScenarioSpec:
             if self.spatial_dim == 3 and self.plane_altitude is None:
                 values.pop("spatial_dim")
                 values.pop("plane_altitude")
+            if self.env_agent_type == "particle" and self.env_agent_action_type == "acceleration" and self.env_config is None:
+                for name in ("env_agent_type", "env_agent_action_type", "env_config"):
+                    values.pop(name)
             key = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()[:20]
             object.__setattr__(self, "scenario_id", f"{self.split}:{self.distribution}:{key}")
 

@@ -49,3 +49,77 @@ def test_position_command_moves_without_teleport_and_invalid_batch_is_atomic(mod
 def test_unsupported_model_control_combinations_fail_at_construction(kwargs):
     with pytest.raises(ValueError):
         make_env(**kwargs)
+
+
+def test_known_opponent_constructor_honors_config_before_explicit_overrides():
+    from had_env.grouping.environment import KnownOpponentEnv
+    env = KnownOpponentEnv(red=1, blue=1, config={"env_agent_type": "UAV_quadrotor", "task_mode": "damage"})
+    try:
+        assert env.env_agent_type == "UAV_quadrotor"
+        assert env.task_mode == "damage"
+        assert env.spatial_dim == 3
+    finally:
+        env.adapter.env.close()
+    overridden = KnownOpponentEnv(red=1, blue=1,
+        config={"env_agent_type": "UAV_quadrotor", "task_mode": "damage"},
+        env_agent_type="UAV_fixedwing", task_mode="survival")
+    try:
+        assert overridden.env_agent_type == "UAV_fixedwing"
+        assert overridden.task_mode == "survival"
+        assert overridden.spatial_dim == 3
+    finally:
+        overridden.adapter.env.close()
+
+
+def test_grouping_factory_routes_custom_geometry_and_scales_rule_executor():
+    config = {"env_agent_type": "UAV_quadrotor", "scene_scale": .2,
+              "world_bounds": [[-500., 500.], [-500., 500.], [0., 500.]]}
+    env = make_env(api="grouping", config=config, red_count=1, blue_count=1)
+    try:
+        env.reset(seed=17)
+        np.testing.assert_array_equal(env.adapter.env.world_bounds, config["world_bounds"])
+        assert env.effective_config.scene_scale == .2
+        assert env.executor.config["guard_distance"] == 140.
+    finally:
+        env.adapter.env.close()
+
+
+@pytest.mark.parametrize("model", ["UAV_fixedwing", "UAV_quadrotor"])
+def test_scaled_uav_rush_reaches_target_fire_before_default_horizon(model):
+    from had_env.grouping.environment import KnownOpponentEnv
+    env = KnownOpponentEnv(red=1, blue=1, targets=1, max_steps=100,
+        env_agent_type=model, task_mode="damage", seed=17)
+    try:
+        env.reset(seed=17)
+        adapter, world = env.adapter, env.adapter.env
+        target, blue = world.targets[0], world.blue_agents[0]
+        velocity = [-30., 0., 0.] if model == "UAV_fixedwing" else [0., 0., 0.]
+        blue.reset([0., target.position[1], target.position[2]], velocity)
+        world.red_agents[0].Health = 0.
+        world.update_alive_agents()
+        adapter.set_joint_assignments({adapter.red_ids[0]: None}, {adapter.blue_ids[0]: 0})
+        done = False
+        while not done and adapter.step_count < 100:
+            _, _, done, _ = adapter.step({adapter.red_ids[0]: 0}, blue_style="rush")
+            assert np.isfinite(blue.rigid_state).all()
+            assert abs(np.linalg.norm(blue.rigid_state[6:10])-1.) < 1e-12
+        assert adapter.step_count < 100
+        assert world.target_damage > 0.
+        assert target.Health == target.initial_health  # damage task remains live
+    finally:
+        env.adapter.env.close()
+
+
+def test_native_effective_config_sets_uav_dimensions_and_task():
+    from had_env.config import EnvConfig
+    from had_env.core.make_env import HADEnv
+    config = EnvConfig(env_agent_type="UAV_quadrotor", spatial_dim=3, task_mode="damage")
+    env = HADEnv(1, 1, 1, effective_config=config)
+    try:
+        assert env.spatial_dim == 3
+        assert env.task_mode == "damage"
+        assert env.control_space.shape == (3,)
+        env.reset(seed=17)
+        assert all(entity.spatial_dim == 3 for entity in env.world)
+    finally:
+        env.close()
