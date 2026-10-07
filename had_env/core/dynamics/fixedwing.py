@@ -164,21 +164,26 @@ class FixedWingDynamics(RigidBodyDynamics):
         course = np.arctan2(velocity[1], velocity[0]) if np.linalg.norm(velocity[:2]) > 1e-6 else heading
         path = np.arctan2(velocity[2], np.linalg.norm(velocity[:2]))
         desired_speed = float(np.clip(desired_speed, self.min_speed, self.max_speed))
+        # Schedule the feasible level-flight equilibrium with requested speed.
+        # The cached solve preserves both longitudinal trim and the small
+        # lateral sideslip needed to balance propeller reaction torque.
+        trim_state, trim_actuator = self.trim(desired_speed)
+        trim_pitch, trim_beta = flight_angles(trim_state[6:10])[1:]
         desired_path = float(np.clip(desired_path, -self.max_flight_path, self.max_flight_path))
         heading_error = wrap_angle(desired_heading-course)
         desired_roll = np.clip(-np.arctan2(max(speed, self.min_speed)*heading_error, self.gravity),
                                -self.max_bank, self.max_bank)
-        desired_pitch = np.clip(self.trim_alpha + desired_path + .5*(desired_path-path),
+        desired_pitch = np.clip(trim_pitch + desired_path + .5*(desired_path-path),
                                 -self.max_pitch, self.max_pitch)
         p, q, r = self.frd_to_flu @ state[10:13]
         body_velocity = self.frd_to_flu @ (quaternion_matrix(state[6:10]).T @ velocity)
         beta = np.arcsin(np.clip(body_velocity[1]/max(speed, 1e-6), -1., 1.))
-        trim_e, trim_a, trim_r = self.trim_actuator[:3]*self.surface_limit
+        trim_e, trim_a, trim_r = trim_actuator[:3]*self.surface_limit
         elevator = trim_e - 2.*(desired_pitch-pitch) + .25*q
         aileron = trim_a + .5*(desired_roll-roll) - .08*p
         desired_yaw_frd = self.gravity*np.tan(desired_roll)/max(speed, self.min_speed)
-        rudder = trim_r + .8*beta + .1*(r-desired_yaw_frd)
-        trim_throttle = (self.trim_actuator[3]+1.)/2.
+        rudder = trim_r + .8*(beta-trim_beta) + .1*(r-desired_yaw_frd)
+        trim_throttle = (trim_actuator[3]+1.)/2.
         throttle = trim_throttle + .08*(desired_speed-speed) + .7*np.sin(desired_path)
         return np.clip(np.r_[np.array([elevator, aileron, rudder])/self.surface_limit, 2.*throttle-1.], -1., 1.)
 

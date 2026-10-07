@@ -18,7 +18,8 @@ from .rigid_body import RigidBodyDynamics
 
 class QuadrotorDynamics(RigidBodyDynamics):
     max_acceleration = acceleration_limit = 6.
-    max_speed = 12.
+    max_speed = 20.
+    position_speed = 12.
     actuator_low = 0.
     arm_length = .315
     yaw_ratio = .008004
@@ -74,7 +75,7 @@ class QuadrotorDynamics(RigidBodyDynamics):
         return self._acceleration_control(state, 2. * (velocity - state[3:6]))
 
     def position_to_actuator(self, state, position):
-        velocity = clip_norm(.5 * (np.asarray(position) - state[:3]), self.max_speed)
+        velocity = clip_norm(.5 * (np.asarray(position) - state[:3]), self.position_speed)
         return self.velocity_to_actuator(state, velocity)
 
 

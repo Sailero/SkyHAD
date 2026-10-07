@@ -109,6 +109,16 @@ def test_quadrotor_zero_rotor_thrust_is_free_fall():
     np.testing.assert_allclose(result[:6], [0., 0., 95.095, 0., 0., -9.81], atol=1e-10)
 
 
+def test_quadrotor_zero_acceleration_preserves_feasible_sixteen_mps_velocity():
+    _, Quad = models()
+    model = Quad()
+    state = model.initial_state([0., 0., 100.], [16., 0., 0.])
+    result, _ = model.advance(state, [0., 0., 0.], "acceleration", dt=2.)
+    # The ideal model has no drag. Its velocity reference supports 20 m/s,
+    # while the slower 12 m/s cap belongs only to position guidance.
+    np.testing.assert_allclose(result[:6], [32., 0., 100., 16., 0., 0.], atol=1e-9)
+
+
 def test_quadrotor_flu_tilt_and_rotor_moments_have_physical_signs():
     _, Quad = models()
     from had_env.core.dynamics.control import quaternion_from_euler
@@ -135,6 +145,19 @@ def test_fixedwing_trim_rotates_with_heading_without_changing_balance():
         assert np.linalg.norm(derivative[3:6]) < 1e-6
         assert np.linalg.norm(derivative[10:13]) < 1e-6
         np.testing.assert_allclose(state[3:6], direction, atol=1e-12)
+
+
+@pytest.mark.parametrize("airspeed", [18., 24., 30.])
+def test_fixedwing_velocity_controller_preserves_level_equilibrium_across_reference_speeds(airspeed):
+    Wing, _ = models()
+    model = Wing()
+    state, _ = model.trim(airspeed)
+    actuator = model.velocity_to_actuator(state, [airspeed, 0., 0.])
+    derivative = model.derivative(state, actuator)
+    # A correct controller should leave this feasible requested equilibrium
+    # intact, including the small sideslip that balances propeller roll torque.
+    assert np.linalg.norm(derivative[3:6]) < 1e-6
+    assert np.linalg.norm(derivative[10:13]) < 1e-6
 
 
 def test_fixedwing_airfoil_and_surface_moments_use_flu_convention():
@@ -167,5 +190,5 @@ def test_all_extreme_physical_actuators_remain_finite_without_velocity_clamps(ki
         assert np.isfinite(result).all()
         assert abs(np.linalg.norm(result[6:10])-1.) < 1e-12
     if kind == "quadrotor":
-        full, _ = model.integrate(state, np.ones(4), dt=1.)
+        full, _ = model.integrate(state, np.ones(4), dt=2.)
         assert full[5] > model.max_speed

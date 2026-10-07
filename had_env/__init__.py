@@ -1,6 +1,6 @@
 """Standalone HAD environments and optional research visualization."""
 
-__version__ = "3.0.0b1"
+__version__ = "3.0.0rc1"
 
 
 def make_env(*args, **kwargs):
