@@ -1,6 +1,6 @@
 # SkyHAD 3.0.0 验收记录
 
-本页记录 2026-10-08 已执行的源码验收，并区分 2026-09-07 独立拆分时的历史结果。当前实现与验收位于隔离工作区 `E:/Code/.had-backups/skyhad-implementation-20261007/checkout`；机器可读报告保存在同级备份目录，不进入源码包。版本名称为 SkyHAD，Python 分发名为 `had-env`，导入名为 `had_env`。目录更名、最终安装包与发布操作仍需最后验收，本页没有把这些操作记为已完成。
+本页记录 2026-10-08 已执行的源码验收，并区分 2026-09-07 独立拆分时的历史结果。实现先在隔离工作区完成，现已合并至 main，项目位于 `E:/Code/SkyHAD`。机器可读报告保存在 `E:/Code/.had-backups/skyhad-implementation-20261007/`，不进入源码包。版本名称为 SkyHAD，Python 分发名为 `had-env`，导入名为 `had_env`。GitHub 仓库已更名为 Sailero/SkyHAD，保持私有及原有历史；最终发行版与推送验证将在末段记录。
 
 ## 来源、基线与历史产物
 
@@ -12,16 +12,18 @@
 - `tests/data/grouping_extraction_validation.json` 保留 2026-09-07 的 32 回合迁移比对记录和 4 条 `historical_golden_cases`。当前 4 条 `golden_cases` 依据**未修改的基线 `cf26fd4`、显式二维 grouping**更新；历史比对与当前 fixture 的来源有独立字段。统一工厂如今默认 3D，不改变这组显式二维回归的含义。
 - `tests/data/open_score_reference.json` 是上游 Open-SCORE 原模块的字面输出，来源修订为 **`6f119e9904b9dfed9cb08b660aff078a2d82247d`**。采集时通过包桩排除无关训练器，物理部分来自与上游相同的原生 HAD 基线；预期值没有由新增兼容层生成。覆盖实体默认值、规模采样、观测与掩码、任务奖励、友军清空后的折叠、轨迹和 nv1 覆盖策略。
 
-旧 `dist/`、`outputs/`、生成的 `build/` 已迁往 `E:/Code/.had-backups/skyhad-history-20261007`，旧发布包和实验结果在源码目录外保留。源目录的 9 个 `__pycache__`（排除 `.venv`、`.git`）也移入该备份下的 `bytecode/`。工作虚拟环境与 editable 元数据保留到最终安装验收。源码包版本统一来自 `had_env.__version__`，物理协议仍单独标记。
+旧 `dist/`、`outputs/`、生成的 `build/` 已迁往 `E:/Code/.had-backups/skyhad-history-20261007`，旧发布包和实验结果在源码目录外保留。源目录的 9 个 `__pycache__`（排除 `.venv`、`.git`）也移入该备份下的 `bytecode/`。旧虚拟环境保存在 history 备份的 `runtime-before-rename/`；新目录已重建独立虚拟环境并安装相同依赖。9 个源码字节码缓存已移出，临时实现工作区及分支已清理。Windows 当前会话和终端仍占用旧目录，所以仓库逐项迁移后旧路径仅剩空目录，其中没有项目文件。源码包版本统一来自 `had_env.__version__`，物理协议仍单独标记。
 
 ## 当前源码回归
 
-使用 `E:/Code/Open_Score_HAD_Workbench/.venv/Scripts/python.exe`，在隔离工作区执行 pytest，并关闭字节码与 pytest 缓存。已有两轮完整记录：
+使用 `E:/Code/Open_Score_HAD_Workbench/.venv/Scripts/python.exe`，在隔离工作区执行 pytest，并关闭字节码与 pytest 缓存。各轮完整记录如下：
 
 | 记录 | passed | skipped | warnings | 用时 | 报告 |
 |---|---:|---:|---:|---:|---|
 | b1 完整回归 | 178 | 2 | 2 | 36.58 秒 | `b1-final.txt`、`b1-final.xml` |
 | rc1 最终源码回归 | 182 | 2 | 2 | 36.83 秒 | `rc1-full.txt`、`rc1-full.xml` |
+| main 合并后 | 182 | 2 | 2 | 36.61 秒 | `merged-full.txt`、`merged-full.xml` |
+| 本地更名及新环境 rc2 | 182 | 2 | 2 | 41.66 秒 | `renamed-full.txt`、`renamed-full.xml` |
 
 两项 skipped 都因为当前解释器没有安装可选依赖 Torch：`tests/test_workbench_rng.py` 的模块级导入，以及 `tests/test_workbench_integration.py` 的可选 Torch 集成测试。两条 warnings 是 PettingZoo 旧环境创建 API 的弃用提示。这里没有将未执行的 Torch 测试记为通过。
 
@@ -84,7 +86,7 @@ UAV 使用 Newton–Euler 刚体状态与 RK4，默认积分子步 **0.01 s**。
 
 历史验收还包括 Qt 离屏真实控件、事件循环与 spawn 工作进程，以及约 114 KiB wheel 的独立目录安装、Python `-I` 跨工作目录调用、精确分支、PNG/SVG/PDF/MP4、Pygame RGB 与 Qt 窗口。旧报告随 `outputs/` 迁入 history 备份；这里保留其来源事实，不宣称 SkyHAD 3.0.0 新 wheel 已通过相同安装流程。
 
-## 复验与最终结果待填
+## 复验与发行验证
 
 在待验收源码目录使用所选解释器执行：
 
@@ -94,9 +96,13 @@ $env:SDL_VIDEODRIVER = 'dummy'
 $env:SDL_AUDIODRIVER = 'dummy'
 $env:OMP_NUM_THREADS = '1'
 $env:MKL_NUM_THREADS = '1'
-& 'E:/Code/Open_Score_HAD_Workbench/.venv/Scripts/python.exe' -B -m pytest -q -p no:cacheprovider
+.\.venv\Scripts\python.exe -B -m pytest -q -p no:cacheprovider
 ```
 
 正常使用窗口时移除 Qt/SDL 离屏环境变量。场景与独立接口脚本及 JSON 位于 `E:/Code/.had-backups/skyhad-implementation-20261007/`，可核对表格与接口结果。
 
-**最终验证待填写：**目录更名后的完整复测、SkyHAD 3.0.0 wheel 构建与独立安装、实际导入路径和入口命令验证、最终提交与推送结果，由主执行者在这些操作完成后填写。当前已确认的是 rc1 源码回归、20 条场景记录和 12 组合接口验收。
+rc2 已完成新目录完整复测、依赖 `pip check`、`skyhad` 与历史 `had-workbench` 实际入口验证。wheel 为 `had_env-3.0.0rc2-py3-none-any.whl`，172617 字节；以 `pip --target` 安装到源码目录外，使用新解释器 `-I -B` 从备份目录执行，**67 项检查全部通过，24.538 秒**。
+
+独立安装验收确认 `had_env` 和 `make_env` 来自 wheel 的 target、目标 PNG 资源完整、公开导入不加载 Qt/Pygame/Torch；覆盖各模型控制的原生、Parallel、MPE，粒子 position、Open-SCORE、分组、录制往返与精确分支，并实际运行 Qt 离屏窗口和 Pygame 帧。FlightSession 分支为内存精确分支；JSON 可移植快照续执行通过 SimulationSession/grouping 验证，二者不混称。报告为 `wheel-acceptance-results-rc2.json`。
+
+最终 3.0.0 发行版、最终提交与推送验证将于完成后追加。
