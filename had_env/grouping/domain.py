@@ -97,6 +97,7 @@ class DecisionState:
     memory: dict[int, tuple[float, ...]] = field(default_factory=dict)
     last_actions: dict[int, int] = field(default_factory=dict)
     spatial_dim: int = 3
+    scene_scale: float = 1.
 
     def alive(self, side: str) -> tuple[Entity, ...]:
         key = side.lower()
@@ -115,6 +116,7 @@ class DecisionState:
                 "red": [asdict(entity) for entity in self.red],
                 "blue": [asdict(entity) for entity in self.blue],
                 "targets": [asdict(entity) for entity in self.targets],
+                **({"scene_scale": self.scene_scale} if self.scene_scale != 1. else {}),
                 "previous": self.previous.to_dict(),
                 "memory": {str(i): list(values) for i, values in self.memory.items()},
                 "last_actions": {str(i): int(value) for i, value in self.last_actions.items()}}
@@ -126,4 +128,4 @@ class DecisionState:
                    Grouping.from_dict(data["previous"]),
                    {int(i): tuple(map(float, row)) for i, row in data.get("memory", {}).items()},
                    {int(i): int(value) for i, value in data.get("last_actions", {}).items()},
-                   int(data.get("spatial_dim", 3)))
+                   int(data.get("spatial_dim", 3)), float(data.get("scene_scale", 1.)))

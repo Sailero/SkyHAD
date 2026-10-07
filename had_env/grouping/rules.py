@@ -23,7 +23,7 @@ def _records_state(adapter, grouping):
     return DecisionState(adapter.step_count, adapter.max_steps, 'reactive',
                          entities(adapter.agent_states('Red')),
                          entities(adapter.agent_states('Blue')),
-                         entities(adapter.target_states()), grouping, spatial_dim=adapter.spatial_dim)
+                         entities(adapter.target_states()), grouping, spatial_dim=adapter.spatial_dim, scene_scale=adapter.scene_scale)
 
 
 def threat_targets(state):
@@ -138,7 +138,7 @@ class RuleExecutor:
             displacement = np.asarray(destination) - reds[identity].position
             distance = float(np.linalg.norm(displacement))
             # Velocity matching avoids repeatedly overshooting a guard point.
-            desired = displacement * min(250.0/max(distance, 1e-9), 1.0)
+            desired = displacement * min((250.0*adapter.scene_scale)/max(distance, 1e-9), 1.0)
             result[identity] = self._nearest_action(adapter, desired - reds[identity].velocity)
         self.last_actions.update({i: result[i] for i in reds})
         return result
@@ -146,9 +146,10 @@ class RuleExecutor:
 
 def make_env(red, blue=None, opponent='reactive', seed=0, max_steps=100,
              command_interval=5, targets=2, target_positions=None, **kwargs):
+    from had_env.scenarios.presets import PRESETS
     executor = kwargs.pop('executor', None)
     if executor is None:
-        executor = RuleExecutor(kwargs.pop('lookahead', 2.0), kwargs.pop('guard_distance', 700.0))
+        executor = RuleExecutor(kwargs.pop('lookahead', 2.0), kwargs.pop('guard_distance', 700.0*PRESETS[kwargs.get('env_agent_type', 'particle')].scene_scale))
     # Device has no effect on the pure deterministic rule lower controller.
     kwargs.pop('device', None)
     return KnownOpponentEnv(red=red, blue=red if blue is None else blue,

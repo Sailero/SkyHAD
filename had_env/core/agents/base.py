@@ -132,6 +132,15 @@ class BaseAgent(Entity):
         self.initial_position = list(self.position)
         self.pre_position = list(self.position)
         self._clamped_axes = []
+        if getattr(self, 'dynamics', None) is not None:
+            self.rigid_state = self.dynamics.initial_state(self.position, self.velocity)
+            self._sync_rigid_state()
+
+    def _sync_rigid_state(self):
+        self.position = self.rigid_state[:3].tolist()
+        self.velocity = self.rigid_state[3:6].tolist()
+        self.attitude = self.rigid_state[6:10].tolist()
+        self.angular_velocity = self.rigid_state[10:13].tolist()
 
     def get_attack_reward(self, world):
         """Adapt legacy Scout/Disturb rewards to the shared three-slot contract.
@@ -184,6 +193,11 @@ class BaseAgent(Entity):
         now_velocity = np.array(self.get_velocity())
 
         # 获取下一时刻的位置
+        if getattr(self, 'dynamics', None) is not None:
+            self.rigid_state = self._next_rigid_state.copy()
+            self._sync_rigid_state()
+            self._clamped_axes = list(self._next_clamped_axes)
+            return
         next_position = now_position + now_velocity * Interval
         if self.spatial_dim == 2:
             next_position[2] = self.plane_altitude
@@ -192,11 +206,11 @@ class BaseAgent(Entity):
         self._clamped_axes = []
         if self.Boundary:
             for i in range(len(next_position)):
-                if next_position[i] > AeroPoint[i][1]:
-                    next_position[i] = AeroPoint[i][1]
+                if next_position[i] > self.world_bounds[i][1]:
+                    next_position[i] = self.world_bounds[i][1]
                     self._clamped_axes.append((i, 1))
-                elif next_position[i] < AeroPoint[i][0]:
-                    next_position[i] = AeroPoint[i][0]
+                elif next_position[i] < self.world_bounds[i][0]:
+                    next_position[i] = self.world_bounds[i][0]
                     self._clamped_axes.append((i, -1))
 
         # 更新智能体状态
@@ -207,6 +221,8 @@ class BaseAgent(Entity):
         if self.Color == "Entity":
             return
 
+        if getattr(self, 'dynamics', None) is not None:
+            return
         now_velocity = np.array(self.get_velocity())
         now_flying_action = np.array(self.get_flying_action())
         if self.spatial_dim == 2:
@@ -277,7 +293,7 @@ class BaseAgent(Entity):
         if len(DisturbAgents) > 0:
             DisturbIntensityArray = np.array(
                 [disturb_intensity_ratio(DisturbAgent.get_position(), position,
-                                         DisturbAgent.get_velocity()) for DisturbAgent in DisturbAgents])
+                                         DisturbAgent.get_velocity(), self.scene_scale) for DisturbAgent in DisturbAgents])
 
             # 获取干扰智能体是否开启干扰的列表
             IsDisturbArray = np.array([DisturbAgent.IsDisturb for DisturbAgent in DisturbAgents])

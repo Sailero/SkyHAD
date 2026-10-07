@@ -68,6 +68,9 @@ class HADStage3Snapshot:
     spatial_dim: int
     plane_altitude: float
     target_initialization: str
+    env_agent_type: str
+    env_agent_action_type: str
+    effective_config: Mapping[str, object]
 
 
 class HADStage3Adapter:
@@ -112,6 +115,7 @@ class HADStage3Adapter:
         target_health: Optional[float] = None,
         spatial_dim: int = 2,
         plane_altitude: Optional[float] = None,
+        effective_config=None,
     ) -> None:
         if red_attackers < 1 or blue_attackers < 1:
             raise ValueError("Stage-3 HAD requires at least one agent on each side")
@@ -131,10 +135,13 @@ class HADStage3Adapter:
         from had_env.core.config import AeroPoint, DefaultTargetRegion
         from had_env.core.make_env import HADEnv
 
-        region = np.asarray(DefaultTargetRegion if target_region is None else target_region, dtype=np.float64)
+        from had_env.config import EnvConfig
+        effective_config = effective_config or EnvConfig(spatial_dim=spatial_dim, task_mode=task_mode,
+                                                         target_region=target_region, plane_altitude=plane_altitude)
+        region = np.asarray(effective_config.target_region if target_region is None else target_region, dtype=np.float64)
         if region.shape != (3, 2) or not np.all(np.isfinite(region)):
             raise ValueError("target_region must provide low/high bounds for x, y, z")
-        bounds = np.asarray(AeroPoint, dtype=np.float64)
+        bounds = np.asarray(effective_config.world_bounds, dtype=np.float64)
         if np.any(region[:, 0] > region[:, 1]):
             raise ValueError("target_region lower bounds must not exceed upper bounds")
         if np.any(region[:, 0] < bounds[:, 0]) or np.any(
@@ -165,7 +172,12 @@ class HADStage3Adapter:
             target_health=target_health,
             spatial_dim=spatial_dim,
             plane_altitude=plane_altitude,
+            effective_config=effective_config,
         )
+        self.env_agent_type = self.env.env_agent_type
+        self.env_agent_action_type = self.env.env_agent_action_type
+        self.effective_config = self.env.effective_config
+        self.scene_scale = self.env.scene_scale
         self.task_mode = self.env.task_mode
         self.target_health = self.env.target_health
         self.spatial_dim = self.env.spatial_dim
@@ -188,7 +200,7 @@ class HADStage3Adapter:
         self._active_target_ids = set(range(targets))
         self._parking_position = np.asarray([2450.0, 2450.0, 950.0], dtype=np.float64)
         self.blue_rule_style = blue_rule_style
-        self.split_spacing = float(split_spacing)
+        self.split_spacing = float(split_spacing)*self.scene_scale
         self.horizon_policy = str(horizon_policy)
         self.step_count = 0
         self.rng = np.random.default_rng()
@@ -317,7 +329,7 @@ class HADStage3Adapter:
         array = np.asarray(positions, dtype=np.float64).copy()
         if array.shape != (len(self.env.targets), 3) or not np.all(np.isfinite(array)):
             raise ValueError("target_positions must have shape [targets, 3]")
-        bounds = np.asarray(AeroPoint, dtype=np.float64)
+        bounds = self.env.world_bounds
         if np.any(array < bounds[:, 0]) or np.any(array > bounds[:, 1]):
             raise ValueError("target_positions must stay inside the HAD world")
         if self.spatial_dim == 2:
@@ -839,6 +851,8 @@ class HADStage3Adapter:
     @staticmethod
     def _entity_record(entity: object) -> Dict[str, object]:
         return {
+            **({'rigid_state': entity.rigid_state.copy(), 'attitude': list(entity.attitude),
+                'angular_velocity': list(entity.angular_velocity)} if getattr(entity, 'dynamics', None) is not None else {}),
             "id": int(entity.Id),
             "position": np.asarray(entity.position, dtype=np.float64).copy(),
             "velocity": np.asarray(entity.velocity, dtype=np.float64).copy(),
@@ -901,6 +915,9 @@ class HADStage3Adapter:
         from had_env.core.version import PHYSICS_PROTOCOL
         return HADStage3Snapshot(
             task_mode=self.task_mode,
+            env_agent_type=self.env_agent_type,
+            env_agent_action_type=self.env_agent_action_type,
+            effective_config=self.effective_config.to_dict(),
             spatial_dim=self.spatial_dim,
             plane_altitude=self.plane_altitude,
             target_initialization=self.env.target_initialization,
@@ -911,7 +928,7 @@ class HADStage3Adapter:
             last_physics_events=tuple(copy.deepcopy(self.env.last_physics_events)),
             step_count=int(self.step_count),
             entity_states=tuple(
-                copy.deepcopy(entity.__dict__) for entity in self.env.world
+                copy.deepcopy({k:v for k,v in entity.__dict__.items() if k not in ('dynamics','_next_rigid_state','_next_clamped_axes')}) for entity in self.env.world
             ),
             red_assignment=tuple(sorted(self._red_assignment.items())),
             blue_assignment=tuple(sorted(self._blue_assignment.items())),
@@ -933,6 +950,9 @@ class HADStage3Adapter:
         """Restore a branch, optionally replacing continuation RNG streams."""
         from had_env.core.version import PHYSICS_PROTOCOL
         if (getattr(snapshot, "physics_protocol", None) != PHYSICS_PROTOCOL
+                or snapshot.env_agent_type != self.env_agent_type
+                or snapshot.env_agent_action_type != self.env_agent_action_type
+                or snapshot.effective_config != self.effective_config.to_dict()
                 or snapshot.task_mode != self.task_mode
                 or snapshot.spatial_dim != self.spatial_dim
                 or snapshot.plane_altitude != self.plane_altitude
@@ -956,8 +976,10 @@ class HADStage3Adapter:
             if state.get("Id") != entity.Id or state.get("Type") != entity.Type:
                 raise ValueError("snapshot entity identity differs from adapter roster")
         for entity, state in zip(self.env.world, snapshot.entity_states):
+            dynamics = entity.dynamics
             entity.__dict__.clear()
             entity.__dict__.update(copy.deepcopy(dict(state)))
+            entity.dynamics = dynamics
         self.step_count = int(snapshot.step_count)
         self.env.target_initialization = snapshot.target_initialization
         self.env.physics_step_count = self.step_count

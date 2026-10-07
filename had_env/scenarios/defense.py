@@ -28,9 +28,10 @@ class Scenario:
     target_region: object = None
     task_mode: str = "survival"
     target_health: float | None = None
-    spatial_dim: int = 2
+    spatial_dim: int = 3
     target_initialization: str = "random"
     target_positions: object = None
+    effective_config: object = None
 
     def __post_init__(self):
         for name in ("red_count", "blue_count", "target_count"):
@@ -74,6 +75,7 @@ class Scenario:
             task_mode=self.task_mode, target_health=self.target_health,
             spatial_dim=self.spatial_dim,
             target_initialization=self.target_initialization, target_positions=self.target_positions,
+            effective_config=self.effective_config,
         )
 
     def reset_world(self, world, *, seed=None, options=None):

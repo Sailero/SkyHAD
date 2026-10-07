@@ -83,7 +83,7 @@ def rule_grouping(state):
     from had_env.core.config import attack_distance_for
     result = []
     positions = {e.id: np.asarray(e.position) for e in state.alive('red')}
-    radius = attack_distance_for(state.spatial_dim)[1]
+    radius = attack_distance_for(state.spatial_dim)[1]*state.scene_scale
     for group in grand_grouping(state).groups:
         remaining = set(group.members)
         while remaining:

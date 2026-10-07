@@ -74,7 +74,7 @@ class AttackAgent(BaseAgent):
             return 0
         
         # 使用地图对角线长度作为归一化因子
-        d_max = np.sqrt(sum([(AeroPoint[i][1] - AeroPoint[i][0])**2 for i in range(3)]))
+        d_max = np.sqrt(sum([(self.world_bounds[i][1] - self.world_bounds[i][0])**2 for i in range(3)]))
         return min_distance / d_max
 
     def calculate_normalized_distance_to_color(self, agents, target_color):
@@ -89,7 +89,7 @@ class AttackAgent(BaseAgent):
             min_distance = min(min_distance, dist)
 
         # 使用地图对角线长度作为归一化因子
-        d_max = np.sqrt(sum([(AeroPoint[i][1] - AeroPoint[i][0]) ** 2 for i in range(3)]))
+        d_max = np.sqrt(sum([(self.world_bounds[i][1] - self.world_bounds[i][0]) ** 2 for i in range(3)]))
 
         if self.Color == "Blue":
             return min_distance / d_max - 1

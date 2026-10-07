@@ -25,13 +25,13 @@ class ScoutAgent(BaseAgent):
         if self.Health > 0:
             return [one for one in world if
                     within_sector_area(self.get_position(), one.get_position(), self.get_velocity(),
-                                       ScoutAngleMax, ScoutDistanceMax) and one.Health > 0]
+                                       ScoutAngleMax, ScoutDistanceMax*self.scene_scale) and one.Health > 0]
         else:
             return []
 
     def get_reward(self, world):
         scout_obs = self.own_observation(world)
-        return reward_scout_single * len(scout_obs) - boundary_loss(self.get_position())
+        return reward_scout_single * len(scout_obs) - boundary_loss(self.get_position(), bounds=self.world_bounds, scene_scale=self.scene_scale)
 
     def choose_function_ruled_action(self, all_agents):
         return []

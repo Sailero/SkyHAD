@@ -31,7 +31,7 @@ class DisturbAgent(BaseAgent):
         if self.Health > 0:
             return [one for one in world if
                     within_sector_area(self.get_position(), one.get_position(), self.get_velocity(),
-                                       DisturbAngleMax, DisturbDistanceMax) and one.Health > 0]
+                                       DisturbAngleMax, DisturbDistanceMax*self.scene_scale) and one.Health > 0]
         else:
             return []
 
@@ -46,12 +46,12 @@ class DisturbAgent(BaseAgent):
                 # 友伤则惩罚，敌伤则奖励
                 if one.Color == self.Color:
                     DisturbIntensityRatio -= disturb_intensity_ratio(self.get_position(), one.get_position(),
-                                                                     self.get_velocity())
+                                                                     self.get_velocity(), self.scene_scale)
                 else:
                     DisturbIntensityRatio += disturb_intensity_ratio(self.get_position(), one.get_position(),
-                                                                     self.get_velocity())
+                                                                     self.get_velocity(), self.scene_scale)
 
-            return reward_disturb_single * DisturbIntensityRatio * DisturbIntensity - boundary_loss(self.get_position())
+            return reward_disturb_single * DisturbIntensityRatio * DisturbIntensity - boundary_loss(self.get_position(), bounds=self.world_bounds, scene_scale=self.scene_scale)
         else:
             return 0
 
@@ -60,9 +60,9 @@ class DisturbAgent(BaseAgent):
         # 这里假设，是在智能体未开启干扰时，仍然可以观察到干扰区域内的敌我方智能体情况。且智能体的干扰不对目标带你产生软杀伤。
         own_obs = self.own_observation(all_agents)
 
-        RedDisturbRatio = [disturb_intensity_ratio(self.get_position(), one.get_position(), self.get_velocity())
+        RedDisturbRatio = [disturb_intensity_ratio(self.get_position(), one.get_position(), self.get_velocity(), self.scene_scale)
                            for one in own_obs if one.Color == 'Red']
-        BlueDisturbRatio = [disturb_intensity_ratio(self.get_position(), one.get_position(), self.get_velocity())
+        BlueDisturbRatio = [disturb_intensity_ratio(self.get_position(), one.get_position(), self.get_velocity(), self.scene_scale)
                             for one in own_obs if one.Color == 'Blue']
 
         IsDisturb = False

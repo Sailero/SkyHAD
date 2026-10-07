@@ -48,7 +48,7 @@ def distribution(state: DecisionState, opponent: str) -> tuple[list[Grouping], n
         quotas = tuple(n // count + int(i < n % count) for i in range(count))
         return [_allocate(state, quotas)], np.ones(1)
     travel = np.asarray([np.mean([np.linalg.norm(np.asarray(blue.position) - target.position)
-                                for blue in state.alive("blue")]) / 5000.0
+                                for blue in state.alive("blue")]) / (5000.0*state.scene_scale)
                          for target in state.targets])
     actions = [_allocate(state, tuple(n if j == i else 0 for j in range(count)))
                for i in range(count)]
@@ -56,7 +56,7 @@ def distribution(state: DecisionState, opponent: str) -> tuple[list[Grouping], n
         index = int(np.argmin(travel))
         return [actions[index]], np.ones(1)
     coverage = np.asarray([sum(max(0.0, red.health) * np.exp(
-        -np.linalg.norm(np.asarray(red.position) - target.position) / 850.0)
+        -np.linalg.norm(np.asarray(red.position) - target.position) / (850.0*state.scene_scale))
         for red in state.alive("red")) for target in state.targets])
     logits = -2.0 * coverage - 0.25 * travel
     probabilities = np.exp(logits - logits.max())

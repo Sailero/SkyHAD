@@ -73,7 +73,7 @@ def test_stable_spaces_order_shapes_and_reward_components():
     observation_spaces = [env.observation_space(a) for a in names]
     assert infos["red_0"]["role"] == "scout"
     assert infos["blue_0"]["role"] == "disturb"
-    assert all(x.shape == (7, 7) for x in obs.values())
+    assert all(x.shape == (7, 11) for x in obs.values())
     for a, row in obs.items():
         assert env.observation_space(a).contains(row)
         assert len(infos[a]["observation_entities"]) == 7
@@ -96,14 +96,14 @@ def test_invalid_joint_action_has_no_side_effects(continuous, bad):
     env = make_env(red_count=1, blue_count=1, continuous=continuous)
     env.reset(seed=12)
     before = _world_rows(env)
-    rng = copy.deepcopy(env._legacy_random_state)
+    rng = copy.deepcopy(env.np_random.bit_generator.state)
     good = [0, 0, 0] if continuous else 0
     for actions in ({"red_0": good, "blue_0": bad}, {"red_0": good}, {"unknown": good}):
         with pytest.raises(ValueError):
             env.step(actions)
         assert _world_rows(env) == before
         assert env.num_cycles == env.world.physics_step_count == 0
-        np.testing.assert_array_equal(env._legacy_random_state[1], rng[1])
+        assert env.np_random.bit_generator.state == rng
     env.close()
 
 
@@ -163,7 +163,6 @@ def test_private_rng_does_not_change_ambient_numpy_and_is_repeatable(monkeypatch
     action = {a: 0 for a in first.agents}
     action["red_0"] = 5  # a discrete acceleration containing negative x
     first.step(action)
-    assert first._legacy_random_state[2] != 624
     after = np.random.get_state()
     assert before[0] == after[0] and before[2:] == after[2:]
     np.testing.assert_array_equal(before[1], after[1])

@@ -92,12 +92,12 @@ def within_sector_area(position3d1, position3d2, velocity3d, AngleMax, DistMax):
 
 
 # 计算软杀伤比率
-def disturb_intensity_ratio(position3d1, position3d2, velocity3d):
+def disturb_intensity_ratio(position3d1, position3d2, velocity3d, scene_scale=1.):
     # 输入干扰机与被干扰机的相对位置与干扰机的速度（均为矢量！），基于高斯分布得到干扰强度
     dist = distance(position3d1, position3d2)
     IsDisturbed = within_sector_area(position3d1, position3d2, velocity3d, DisturbAngleMax,
-                                     DisturbDistanceMax) * (dist > 1e-3)  # 保证自身不会干扰到自身
-    return IsDisturbed * norm.pdf(dist, 0, GaussSigma)
+                                     DisturbDistanceMax*scene_scale) * (dist > 1e-3)  # 保证自身不会干扰到自身
+    return IsDisturbed * norm.pdf(dist/scene_scale, 0, GaussSigma)
 
 
 # 计算按照右手螺旋法则旋转angle度后的向量
@@ -165,8 +165,9 @@ def closest_segment_distance(p1, q1, p2, q2):
     return float(np.linalg.norm(relative_position + time * relative_displacement))
 
 
-def world_diagonal():
-    return float(np.sqrt(sum((AeroPoint[dim][1] - AeroPoint[dim][0]) ** 2 for dim in range(EnvDim))))
+def world_diagonal(bounds=None):
+    bounds = AeroPoint if bounds is None else bounds
+    return float(np.sqrt(sum((bounds[dim][1] - bounds[dim][0]) ** 2 for dim in range(EnvDim))))
 
 
 def velocity_scale():
@@ -177,11 +178,12 @@ class WorldKinematics:
     """Lightweight pre-update snapshot used instead of deepcopy(world)."""
 
     __slots__ = ("positions", "velocities", "health", "is_fire", "is_disturb",
-                 "color_code", "type_code", "attack_distance")
+                 "color_code", "type_code", "attack_distance", "scene_scale")
 
     def __init__(self, world, color_code=None, type_code=None, *, attack_distance=None):
         self.attack_distance = tuple(attack_distance if attack_distance is not None else
                                      world[0].attack_distance if world else attack_distance_for(2))
+        self.scene_scale = getattr(world[0], "scene_scale", 1.) if world else 1.
         self.positions = np.asarray([entity.position for entity in world], dtype=np.float64)
         self.velocities = np.asarray([entity.velocity for entity in world], dtype=np.float64)
         self.health = np.asarray([float(entity.Health) for entity in world], dtype=np.float64)
@@ -215,17 +217,18 @@ class WorldKinematics:
         total = 0.0
         victim = np.asarray(victim_pos, dtype=np.float64)
         for position, velocity in zip(self.positions[mask], self.velocities[mask]):
-            total += disturb_intensity_ratio(position, victim, velocity)
+            total += disturb_intensity_ratio(position, victim, velocity, self.scene_scale)
         return float(DisturbIntensity * total)
 
 
 # 定义智能体距离边界的距离
-def boundary_loss(position, boundary_range=100):
+def boundary_loss(position, boundary_range=100, bounds=None, scene_scale=1.):
+    bounds = AeroPoint if bounds is None else bounds
     if Boundary:
-        min_distance = min(min(abs(position[0] - AeroPoint[0][0]), abs(position[0] - AeroPoint[0][1])),
-                           min(abs(position[1] - AeroPoint[1][0]), abs(position[1] - AeroPoint[1][1])))
-        if min_distance < boundary_range:
-            return reward_boundary * np.exp(-min_distance)
+        min_distance = min(min(abs(position[0] - bounds[0][0]), abs(position[0] - bounds[0][1])),
+                           min(abs(position[1] - bounds[1][0]), abs(position[1] - bounds[1][1])))
+        if min_distance < boundary_range*scene_scale:
+            return reward_boundary * np.exp(-min_distance/scene_scale)
         else:
             return 0
     else:

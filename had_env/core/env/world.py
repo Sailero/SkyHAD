@@ -14,7 +14,7 @@ class World:
     def __init__(self, red_scout_n, red_disturb_n, red_attack_n,
                  blue_scout_n, blue_disturb_n, blue_attack_n,
                  target_n, task_mode='survival', target_health=None,
-                 spatial_dim=2, plane_altitude=None):
+                 spatial_dim=2, plane_altitude=None, effective_config=None):
         # 读取世界信息
         self.red_scout_n = red_scout_n
         self.red_disturb_n = red_disturb_n
@@ -25,11 +25,23 @@ class World:
         self.target_n = target_n
         if isinstance(spatial_dim, bool) or spatial_dim not in (2, 3):
             raise ValueError("spatial_dim must be 2 or 3")
+        from had_env.config import EnvConfig
+        self.effective_config = effective_config or EnvConfig(spatial_dim=spatial_dim,
+            task_mode=task_mode, plane_altitude=plane_altitude)
+        self.env_agent_type = self.effective_config.env_agent_type
+        self.env_agent_action_type = self.effective_config.env_agent_action_type
+        self.scene_scale = self.effective_config.scene_scale
+        self.world_bounds = np.asarray(self.effective_config.world_bounds, dtype=float)
+        self.collision_distance = self.effective_config.collision_distance
+        self.dynamics = None
+        if self.env_agent_type != 'particle':
+            from had_env.core.dynamics import FixedWingDynamics, QuadrotorDynamics
+            self.dynamics = (FixedWingDynamics if self.env_agent_type == 'UAV_fixedwing' else QuadrotorDynamics)()
         self.spatial_dim = int(spatial_dim)
-        self.attack_distance = attack_distance_for(self.spatial_dim)
+        self.attack_distance = self.effective_config.attack_distance
         self.fire_range = self.attack_distance[0]
-        self.plane_altitude = float(PlanarAltitude if plane_altitude is None else plane_altitude)
-        if not np.isfinite(self.plane_altitude) or not AeroPoint[2][0] <= self.plane_altitude <= AeroPoint[2][1]:
+        self.plane_altitude = self.effective_config.plane_altitude
+        if not np.isfinite(self.plane_altitude) or not self.world_bounds[2, 0] <= self.plane_altitude <= self.world_bounds[2, 1]:
             raise ValueError("plane_altitude must be finite and inside the world height bounds")
         if task_mode not in ('survival', 'damage'):
             raise ValueError("task_mode must be survival or damage")
@@ -43,6 +55,14 @@ class World:
         self.world = self.create_world()
         for entity in self.world:
             entity.spatial_dim = self.spatial_dim
+            entity.env_agent_type = self.env_agent_type
+            entity.env_agent_action_type = self.env_agent_action_type
+            entity.world_bounds = self.world_bounds
+            entity.scene_scale = self.scene_scale
+            entity.dynamics = self.dynamics if entity.Type != 'Entity' else None
+            entity.vMin = self.effective_config.preset.min_speed
+            entity.vMax = self.effective_config.preset.max_speed
+            entity.aMax = self.effective_config.preset.acceleration_limit
             entity.attack_distance = self.attack_distance
             entity.fire_range = self.fire_range
             entity.plane_altitude = self.plane_altitude
@@ -121,6 +141,11 @@ class World:
         reason = self._episode_termination_reason()
         return {
             'task_mode': self.task_mode,
+            'env_agent_type': self.env_agent_type,
+            'env_agent_action_type': self.env_agent_action_type,
+            'effective_config': self.effective_config.to_dict(),
+            'world_bounds': self.world_bounds.tolist(),
+            'scene_scale': self.scene_scale,
             'target_initialization': self.target_initialization,
             'spatial_dim': self.spatial_dim,
             'plane_altitude': self.plane_altitude,
@@ -230,6 +255,28 @@ class World:
         return [agent.get_status() for agent in self.world]
 
     def step(self, flying_action_n):
+        if self.dynamics is not None:
+            # Predict all synchronized paths before collisions/fire mutate health.
+            paths = {}
+            for agent, command in zip(self.agents, flying_action_n):
+                if agent.Health <= 0:
+                    continue
+                candidate, path = self.dynamics.advance(agent.rigid_state, command,
+                                                        self.env_agent_action_type, dt=Interval)
+                clipped_path = np.clip(path, self.world_bounds[:, 0], self.world_bounds[:, 1])
+                axes = []
+                for axis in range(3):
+                    if candidate[axis] > self.world_bounds[axis, 1]:
+                        candidate[axis] = self.world_bounds[axis, 1]
+                        candidate[3+axis] = min(0., candidate[3+axis])
+                        axes.append((axis, 1))
+                    elif candidate[axis] < self.world_bounds[axis, 0]:
+                        candidate[axis] = self.world_bounds[axis, 0]
+                        candidate[3+axis] = max(0., candidate[3+axis])
+                        axes.append((axis, -1))
+                agent._next_rigid_state = candidate
+                agent._next_clamped_axes = axes
+                paths[agent.Id] = clipped_path
         self.physics_step_count += 1
         self.last_physics_events = []
         self.boundary_clips = 0
@@ -247,11 +294,16 @@ class World:
                     continue
                 p2 = np.asarray(second.position, dtype=np.float64)
                 v2 = np.asarray(second.velocity, dtype=np.float64)
-                if float(np.linalg.norm(p1 - p2)) > AvoidanceDistance + float(np.linalg.norm(v1 - v2)) * Interval:
+                if self.dynamics is None and float(np.linalg.norm(p1 - p2)) > self.collision_distance + float(np.linalg.norm(v1 - v2)) * Interval:
                     continue
                 q2 = p2 + v2 * Interval
-                separation = closest_segment_distance(p1, q1, p2, q2)
-                if separation <= AvoidanceDistance:
+                if self.dynamics is None:
+                    separation = closest_segment_distance(p1, q1, p2, q2)
+                else:
+                    path1, path2 = paths[first.Id], paths[second.Id]
+                    separation = min(closest_segment_distance(path1[k], path1[k+1], path2[k], path2[k+1])
+                                     for k in range(len(path1)-1))
+                if separation <= self.collision_distance:
                     if self.record_events:
                         for source, target in ((first, second), (second, first)):
                             if target.Health > 0:

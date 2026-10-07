@@ -76,6 +76,12 @@ class HADParallelEnv(ParallelEnv):
             self.reward_weights = weights.copy()
         self.world = self.scenario.make_world(seed=seed)
         self.world.record_events = bool(record_events)
+        self.env_agent_type = self.world.env_agent_type
+        self.env_agent_action_type = self.world.env_agent_action_type
+        self.continuous = continuous or self.env_agent_action_type != 'acceleration'
+        self.effective_config = self.world.effective_config
+        self._self_state_size = (13 if self.env_agent_type != 'particle' else
+                                 6 if self.env_agent_action_type == 'position' else 0)
         self.possible_agents = ([f"red_{i}" for i in range(self.scenario.red_count)]
                                 + [f"blue_{i}" for i in range(self.scenario.blue_count)])
         self.agent_name_mapping = {name: i for i, name in enumerate(self.possible_agents)}
@@ -88,10 +94,17 @@ class HADParallelEnv(ParallelEnv):
         shape = (len(self.entity_names) - 1, OBS_ENTITY_DIM)
         self.observation_spaces = {a: spaces.Box(-np.inf, np.inf, shape, np.float32)
                                    for a in self.possible_agents}
-        self.action_spaces = {a: (spaces.Box(-1., 1., (self.spatial_dim,), np.float32) if continuous
+        if self._self_state_size:
+            self.observation_spaces = {a: spaces.Dict({
+                'entities': space, 'self_state': spaces.Box(-np.inf, np.inf, (self._self_state_size,), np.float32)})
+                for a, space in self.observation_spaces.items()}
+        self.action_spaces = {a: (spaces.Box(-1., 1., (self.spatial_dim,), np.float32) if self.continuous
                                   else spaces.Discrete(len(self.acceleration_primitives)))
                               for a in self.possible_agents}
-        self.state_space = spaces.Box(-np.inf, np.inf, (len(self.entity_names) * OBS_ENTITY_DIM,), np.float32)
+        if self.env_agent_action_type != 'acceleration':
+            self.action_spaces = {a: self.world.control_space for a in self.possible_agents}
+        state_size = len(self.entity_names)*OBS_ENTITY_DIM + (13*len(self.possible_agents)+3 if self.env_agent_type != 'particle' else 0)
+        self.state_space = spaces.Box(-np.inf, np.inf, (state_size,), np.float32)
         self._all_actions = (1,) * len(self.acceleration_primitives)
         self._noop_actions = (1,) + (0,) * (len(self.acceleration_primitives) - 1)
         self.agents = []
@@ -132,14 +145,30 @@ class HADParallelEnv(ParallelEnv):
         return obs, infos
 
     def _observations(self, values, agents):
-        return {
-            a: (np.zeros(self.observation_spaces[a].shape, dtype=np.float32)
-                if self.task_mode == "damage" and self._entity(a).Health <= 0
-                else np.array(values[self.agent_name_mapping[a]], dtype=np.float32, copy=True))
-            for a in agents
-        }
+        result = {}
+        for a in agents:
+            entity = self._entity(a)
+            dead = self.task_mode == 'damage' and entity.Health <= 0
+            rows = np.array(values[self.agent_name_mapping[a]], dtype=np.float32, copy=True)
+            if dead:
+                rows[:] = 0
+            if self._self_state_size:
+                state = (entity.rigid_state if self.env_agent_type != 'particle' else
+                         np.asarray(entity.position + entity.velocity))
+                result[a] = {'entities': rows, 'self_state': np.zeros(self._self_state_size, np.float32)
+                             if dead else np.asarray(state, np.float32).copy()}
+            else:
+                result[a] = rows
+        return result
 
     def _decode_action(self, agent, action):
+        if self.env_agent_action_type != 'acceleration':
+            value = np.asarray(action)
+            space = self.action_space(agent)
+            if (value.shape != space.shape or value.dtype.kind not in 'iuf' or not np.isfinite(value).all()
+                    or np.any(value < space.low) or np.any(value > space.high)):
+                raise ValueError(f"{agent} action must be a finite vector inside its action space")
+            return value.astype(float).tolist()
         if not self.continuous:
             if isinstance(action, (bool, np.bool_)) or not self.action_space(agent).contains(action):
                 raise ValueError(f"{agent} action must be an integer in 0..{len(self.acceleration_primitives) - 1}")
@@ -238,7 +267,12 @@ class HADParallelEnv(ParallelEnv):
     def state(self):
         if not self._has_reset:
             raise RuntimeError("Call reset before requesting state")
-        return np.asarray(self.world.get_global_state(), dtype=np.float32)
+        state = self.world.get_global_state()
+        if self.env_agent_type != 'particle':
+            for entity in self.world.agents:
+                state.extend(entity.rigid_state.tolist() if entity.Health > 0 else [0.]*13)
+            state.extend([self.num_cycles, self.world.target_damage, float(self.task_mode == 'damage')])
+        return np.asarray(state, dtype=np.float32)
 
     def render(self):
         if not self._has_reset or self._closed:
@@ -288,7 +322,7 @@ class MPEEnv:
     def reset(self, seed=None, options=None):
         obs, self._infos = self.parallel_env.reset(seed=seed, options=options)
         self._done = {a: False for a in self.possible_agents}
-        return [obs[a].reshape(-1) for a in self.possible_agents]
+        return [spaces.flatten(self.parallel_env.observation_space(a), obs[a]) for a in self.possible_agents]
 
     def step(self, actions):
         if len(actions) != self.n:
@@ -301,8 +335,8 @@ class MPEEnv:
                 joint[a] = [0.] * self.parallel_env.spatial_dim if self.parallel_env.continuous else 0
                 continue
             array = np.asarray(value)
-            action_count = None if self.parallel_env.continuous else self.parallel_env.action_space(a).n
-            if not self.parallel_env.continuous and array.shape == (action_count,):
+            action_count = self.parallel_env.action_space(a).n if isinstance(self.parallel_env.action_space(a), spaces.Discrete) else None
+            if action_count is not None and array.shape == (action_count,):
                 if not np.all((array == 0) | (array == 1)) or np.sum(array) != 1:
                     raise ValueError(f"MPE vector actions must be explicit length-{action_count} one-hot vectors")
                 value = int(np.argmax(array))
@@ -311,7 +345,7 @@ class MPEEnv:
         rows, values, dones, details = [], [], [], []
         for i, a in enumerate(self.possible_agents):
             self._done[a] = self._done[a] or terms.get(a, False) or truncs.get(a, False)
-            rows.append(obs[a].reshape(-1) if a in obs else np.zeros(self.observation_space[i].shape, np.float32))
+            rows.append(spaces.flatten(self.parallel_env.observation_space(a), obs[a]) if a in obs else np.zeros(self.observation_space[i].shape, np.float32))
             values.append(rewards.get(a, 0.))
             dones.append(self._done[a])
             info = infos.get(a, {**self._infos.get(a, {}), "inactive": True})

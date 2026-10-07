@@ -11,26 +11,30 @@ class Env(World):
                  red_spawn_annulus=None, blue_spawn_x=None, spawn_altitude=None,
                  fire_range=None, horizon_policy=None, reward_config=None,
                  task_mode='survival', target_health=None, spatial_dim=2, plane_altitude=None,
-                 target_initialization='random', target_positions=None):
+                 target_initialization='random', target_positions=None, effective_config=None):
+        from had_env.config import EnvConfig
+        effective_config = effective_config or EnvConfig(spatial_dim=spatial_dim, task_mode=task_mode,
+            plane_altitude=plane_altitude, target_region=target_region, red_spawn_annulus=red_spawn_annulus,
+            blue_spawn_x=blue_spawn_x, spawn_altitude=spawn_altitude, fire_range=fire_range)
         super(Env, self).__init__(red_scout_n, red_disturb_n, red_attack_n,
                                   blue_scout_n, blue_disturb_n, blue_attack_n,
                                   target_n, task_mode=task_mode, target_health=target_health,
-                                  spatial_dim=spatial_dim, plane_altitude=plane_altitude)
+                                  spatial_dim=spatial_dim, plane_altitude=plane_altitude, effective_config=effective_config)
 
         # 定义各个智能体数量以便于reset和render
         self.red_agent_n = self.red_disturb_n + self.red_attack_n + self.red_scout_n
         self.blue_agent_n = self.blue_disturb_n + self.blue_attack_n + self.blue_scout_n
 
         # 读取区域限制
-        self.area = AeroPoint
+        self.area = self.world_bounds
         self.target_region = np.asarray(
-            DefaultTargetRegion if target_region is None else target_region,
+            self.effective_config.target_region if target_region is None else target_region,
             dtype=np.float64,
         )
-        self.red_spawn_annulus = tuple(RedSpawnAnnulus if red_spawn_annulus is None else red_spawn_annulus)
-        self.blue_spawn_x = tuple(BlueSpawnX if blue_spawn_x is None else blue_spawn_x)
-        self.spawn_altitude = tuple(SpawnAltitude if spawn_altitude is None else spawn_altitude)
-        self.fire_range = float(self.attack_distance[0] if fire_range is None else fire_range)
+        self.red_spawn_annulus = tuple(self.effective_config.red_spawn_annulus if red_spawn_annulus is None else red_spawn_annulus)
+        self.blue_spawn_x = tuple(self.effective_config.blue_spawn_x if blue_spawn_x is None else blue_spawn_x)
+        self.spawn_altitude = tuple(self.effective_config.spawn_altitude if spawn_altitude is None else spawn_altitude)
+        self.fire_range = float(self.effective_config.fire_range if fire_range is None else fire_range)
         if not np.isfinite(self.fire_range) or not 0 < self.fire_range <= self.attack_distance[0]:
             raise ValueError("fire_range must be positive and no larger than the full-damage radius")
         for entity in self.world:
@@ -49,7 +53,7 @@ class Env(World):
             self.reward_config.update(reward_config)
         if self.target_region.shape != (3, 2):
             raise ValueError("target_region must contain [low, high] for x, y, z")
-        world_bounds = np.asarray(AeroPoint, dtype=np.float64)
+        world_bounds = self.world_bounds
         if np.any(self.target_region[:, 0] > self.target_region[:, 1]):
             raise ValueError("target_region lower bounds must not exceed upper bounds")
         if np.any(self.target_region[:, 0] < world_bounds[:, 0]) or np.any(
@@ -145,7 +149,7 @@ class Env(World):
                 target.reset(position.tolist(), [0.0] * EnvDim)
             return
         placed = []
-        spacing = max(float(PlanarSpawnSeparation), float(AvoidanceDistance) + 1e-6)
+        spacing = max(float(PlanarSpawnSeparation)*self.scene_scale, self.collision_distance + 1e-6)
         for target in self.targets:
             for _ in range(4096):
                 point = self.np_random.uniform(self.target_region[:self.spatial_dim, 0],
@@ -165,9 +169,9 @@ class Env(World):
         The 3D path and its random draws remain unchanged. This prevents initial
         overlaps from height projection; it does not prevent later collisions.
         """
-        if self.spatial_dim != 2:
+        if self.spatial_dim != 2 and self.env_agent_type == "particle":
             return
-        spacing = max(float(PlanarSpawnSeparation), float(AvoidanceDistance) + 1e-6)
+        spacing = max(float(PlanarSpawnSeparation)*self.scene_scale, self.collision_distance + 1e-6)
         placed = [np.asarray(target.position) for target in self.targets]
         for agent in self.agents:
             point, velocity = agent.position, agent.velocity
@@ -181,57 +185,89 @@ class Env(World):
                 agent.reset(point, velocity)
             placed.append(np.asarray(agent.position))
 
+    @property
+    def control_space(self):
+        from gymnasium import spaces
+        if self.env_agent_action_type == 'position':
+            low = self.world_bounds[:, 0].astype(np.float32)
+            high = self.world_bounds[:, 1].astype(np.float32)
+            if self.spatial_dim == 2:
+                low[2] = high[2] = self.plane_altitude
+            return spaces.Box(low, high, dtype=np.float32)
+        if self.env_agent_action_type == 'actuator':
+            return spaces.Box(0. if self.env_agent_type == 'UAV_quadrotor' else -1., 1., (4,), np.float32)
+        return spaces.Box(-1., 1., (self.spatial_dim,), np.float32)
+
     def step(self, action_n):
-        # Validate the complete batch before collision checks or other mutation.
-        # Values are deliberately not clipped: retain legacy control semantics.
+        # Validate the complete batch before collision checks or any mutation.
         try:
             actions = np.asarray(action_n)
         except (TypeError, ValueError) as error:
-            raise ValueError("actions must be a numeric [agents, EnvDim] array") from error
-        expected = (len(self.agents), EnvDim)
-        if actions.shape != expected:
-            raise ValueError(f"actions must have shape {expected}, got {actions.shape}")
-        if actions.dtype.kind not in "biuf":
-            raise ValueError("actions must contain real numeric values")
-        if not np.all(np.isfinite(actions)):
-            raise ValueError("actions must contain only finite values")
-        if self.spatial_dim == 2:
-            action_n = actions.copy()
-            action_n[:, 2] = 0
-        # Preserve incoming scalar dtypes in the existing scaling calculation.
-        flying_action_n = [(np.array(action_n[i]) * self.agents[i].aMax).tolist() for i in range(len(action_n))]
-        if not np.all(np.isfinite(flying_action_n)):
-            raise ValueError("scaled accelerations must contain only finite values")
-        super().step(flying_action_n)
+            raise ValueError("actions must be a real finite batch") from error
+        width = 4 if self.env_agent_action_type == 'actuator' else 3
+        if actions.shape != (len(self.agents), width) or actions.dtype.kind not in 'biuf' or not np.isfinite(actions).all():
+            raise ValueError(f"actions must have shape {(len(self.agents), width)} and finite numeric values")
+        if self.env_agent_action_type == 'actuator':
+            low = 0. if self.env_agent_type == 'UAV_quadrotor' else -1.
+            if np.any(actions < low) or np.any(actions > 1.):
+                raise ValueError("actuator commands are outside normalized bounds")
+            flying = actions.astype(float).tolist()
+        elif self.env_agent_action_type == 'position':
+            if np.any(actions < self.world_bounds[:, 0]) or np.any(actions > self.world_bounds[:, 1]):
+                raise ValueError("position targets must remain within world bounds")
+            if self.spatial_dim == 2 and np.any(actions[:, 2] != self.plane_altitude):
+                raise ValueError("planar position commands must use plane_altitude")
+            if self.dynamics is not None:
+                flying = actions.astype(float).tolist()
+            else:
+                flying = []
+                for agent, target in zip(self.agents, actions):
+                    displacement = target - np.asarray(agent.position)
+                    desired = displacement * min(agent.vMax/max(np.linalg.norm(displacement), 1e-12), .5)
+                    accel = 2.*(desired - np.asarray(agent.velocity))
+                    accel *= min(agent.aMax/max(np.linalg.norm(accel), 1e-12), 1.)
+                    flying.append(accel.tolist())
+        else:
+            if self.spatial_dim == 2:
+                actions = actions.copy()
+                actions[:, 2] = 0
+            flying = [(np.array(actions[i]) * self.agents[i].aMax).tolist() for i in range(len(actions))]
+            if not np.isfinite(flying).all():
+                raise ValueError("scaled accelerations must be finite")
+        super().step(flying)
 
     def _render_information(self):
         targets_info_n, red_agents_info_n, blue_agents_info_n = [], [], []
         for target in self.targets:
-            position = [(target.position[0] - AeroPoint[0][0]) / (AeroPoint[0][1] - AeroPoint[0][0]),
-                        (target.position[1] - AeroPoint[1][0]) / (AeroPoint[1][1] - AeroPoint[1][0]),
-                        (target.position[2] - AeroPoint[2][0]) / (AeroPoint[2][1] - AeroPoint[2][0])]
+            position = [(target.position[0] - self.world_bounds[0][0]) / (self.world_bounds[0][1] - self.world_bounds[0][0]),
+                        (target.position[1] - self.world_bounds[1][0]) / (self.world_bounds[1][1] - self.world_bounds[1][0]),
+                        (target.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             targets_info_n.append({
                 "position": position,
                 "alive": target.Health > 0
             })
         for red_agent in self.red_agents:
-            position = [(red_agent.position[0] - AeroPoint[0][0]) / (AeroPoint[0][1] - AeroPoint[0][0]),
-                        (red_agent.position[1] - AeroPoint[1][0]) / (AeroPoint[1][1] - AeroPoint[1][0]),
-                        (red_agent.position[2] - AeroPoint[2][0]) / (AeroPoint[2][1] - AeroPoint[2][0])]
+            position = [(red_agent.position[0] - self.world_bounds[0][0]) / (self.world_bounds[0][1] - self.world_bounds[0][0]),
+                        (red_agent.position[1] - self.world_bounds[1][0]) / (self.world_bounds[1][1] - self.world_bounds[1][0]),
+                        (red_agent.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             red_agents_info_n.append({
                 "position": position,
                 "velocity": red_agent.velocity,
                 "type": red_agent.Type,
+                "env_agent_type": self.env_agent_type,
+                "attitude": getattr(red_agent, "attitude", None),
                 "alive": red_agent.Health > 0
             })
         for blue_agent in self.blue_agents:
-            position = [(blue_agent.position[0] - AeroPoint[0][0]) / (AeroPoint[0][1] - AeroPoint[0][0]),
-                        (blue_agent.position[1] - AeroPoint[1][0]) / (AeroPoint[1][1] - AeroPoint[1][0]),
-                        (blue_agent.position[2] - AeroPoint[2][0]) / (AeroPoint[2][1] - AeroPoint[2][0])]
+            position = [(blue_agent.position[0] - self.world_bounds[0][0]) / (self.world_bounds[0][1] - self.world_bounds[0][0]),
+                        (blue_agent.position[1] - self.world_bounds[1][0]) / (self.world_bounds[1][1] - self.world_bounds[1][0]),
+                        (blue_agent.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             blue_agents_info_n.append({
                 "position": position,
                 "velocity": blue_agent.velocity,
                 "type": blue_agent.Type,
+                "env_agent_type": self.env_agent_type,
+                "attitude": getattr(blue_agent, "attitude", None),
                 "alive": blue_agent.Health > 0
             })
 
@@ -296,16 +332,16 @@ class Env(World):
         # 计算x坐标和初始速度方向
         if color == 'Blue':
             agent_x = self.area[0][1] - (self.area[0][1] - self.area[0][0]) * ratio
-            initial_velocity = [-vDomain[0]] + [0.0] * (EnvDim - 1)
+            initial_velocity = [-self.effective_config.preset.min_speed] + [0.0] * (EnvDim - 1)
         else:
             agent_x = (self.area[0][1] - self.area[0][0]) * ratio + self.area[0][0]
-            initial_velocity = [vDomain[0]] + [0.0] * (EnvDim - 1)
+            initial_velocity = [self.effective_config.preset.min_speed] + [0.0] * (EnvDim - 1)
         agent_z = (self.plane_altitude if self.spatial_dim == 2 else
                    float(self.np_random.uniform(self.spawn_altitude[0], self.spawn_altitude[1])))
         return [agent_x, agent_y, agent_z], initial_velocity
 
     def _sample_speed(self):
-        sample = self.np_random.uniform(low=vDomain[0], high=vDomain[1], size=self.spatial_dim)
+        sample = self.np_random.uniform(low=self.effective_config.preset.min_speed, high=self.effective_config.preset.max_speed, size=self.spatial_dim)
         return float(np.linalg.norm(sample) / np.sqrt(self.spatial_dim))
 
     def _sample_direction(self):
@@ -346,6 +382,10 @@ class Env(World):
             random_y = float(self.np_random.uniform(self.area[1][0], self.area[1][1]))
         random_z = float(np.clip(altitude, self.area[2][0], self.area[2][1]))
         velocity = (self._sample_direction() * self._sample_speed()).tolist()
+        if self.env_agent_type == 'UAV_fixedwing':
+            velocity = [30. if color == 'Red' else -30., 0., 0.]
+        elif self.env_agent_type == 'UAV_quadrotor':
+            velocity = [0., 0., 0.]
         return [random_x, random_y, random_z], velocity
 
     def get_observed_agents(self, color):
@@ -401,8 +441,8 @@ class Env(World):
         """
         observation_n = []
         mask_n = []
-        diagonal = world_diagonal()
-        speed = velocity_scale()
+        diagonal = world_diagonal(self.world_bounds)
+        speed = 2.*self.effective_config.preset.max_speed
         for agent in self.agents:
             observation = []
             mask = []
@@ -426,7 +466,7 @@ class Env(World):
                     pos = np.asarray(other.position, dtype=np.float64)
                     vel = np.asarray(other.velocity, dtype=np.float64)
                     if normalization:
-                        pos = np.array([(pos[dim] - AeroPoint[dim][0]) / (AeroPoint[dim][1] - AeroPoint[dim][0])
+                        pos = np.array([(pos[dim] - self.world_bounds[dim][0]) / (self.world_bounds[dim][1] - self.world_bounds[dim][0])
                                         for dim in range(EnvDim)])
                         vel = vel / speed
                 row = pos.tolist() + vel.tolist() + [
@@ -455,7 +495,7 @@ class Env(World):
         返回: 一维 list，长度 = n_entities * OBS_ENTITY_DIM
         """
         global_state = []
-        speed = velocity_scale()
+        speed = 2.*self.effective_config.preset.max_speed
         for entity in self.world:
             is_alive = float(entity.Health > 0)
             flags = [
@@ -469,7 +509,7 @@ class Env(World):
             pos = list(entity.position)
             vel = list(entity.velocity)
             if normalization:
-                pos = [(pos[dim] - AeroPoint[dim][0]) / (AeroPoint[dim][1] - AeroPoint[dim][0]) for dim in range(EnvDim)]
+                pos = [(pos[dim] - self.world_bounds[dim][0]) / (self.world_bounds[dim][1] - self.world_bounds[dim][0]) for dim in range(EnvDim)]
                 vel = (np.asarray(vel, dtype=np.float64) / speed).tolist()
             global_state.extend(pos + vel + [float(entity.Health), is_alive] + flags)
 

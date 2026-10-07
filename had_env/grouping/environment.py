@@ -25,11 +25,29 @@ class KnownOpponentEnv:
     def __init__(self, red=8, blue=8, max_steps=100, opponent="reactive", seed=0,
                  command_interval=5, executor=None, group_max_size=None,
                  targets=2, target_positions=None, horizon_policy="red_win",
-                 task_mode="survival", target_health=None, spatial_dim=2, plane_altitude=None):
+                 task_mode="survival", target_health=None, spatial_dim=None, plane_altitude=None,
+                 env_agent_type="particle", env_agent_action_type="acceleration", config=None):
+        from had_env.config import EnvConfig, load_config
+        values = load_config(config)
+        values.update(env_agent_type=env_agent_type, env_agent_action_type=env_agent_action_type,
+                      task_mode=task_mode)
+        if spatial_dim is not None:
+            values['spatial_dim'] = spatial_dim
+        else:
+            values.setdefault('spatial_dim', 2 if env_agent_type == 'particle' else 3)
+        if plane_altitude is not None:
+            values['plane_altitude'] = plane_altitude
+        effective = EnvConfig.from_values(values)
+        if effective.env_agent_action_type != 'acceleration':
+            raise ValueError('Grouping APIs require acceleration intentions; use parallel or mpe for actuator/position')
+        spatial_dim = effective.spatial_dim
+        self.env_agent_type = effective.env_agent_type
+        self.env_agent_action_type = effective.env_agent_action_type
+        self.effective_config = effective
         if opponent not in OPPONENTS:
             raise ValueError(f"opponent must be one of {OPPONENTS}")
-        if not 1 <= int(max_steps) <= 500 or not 1 <= int(command_interval) <= int(max_steps):
-            raise ValueError("max_steps must be in 1..500 and command_interval in 1..max_steps")
+        if not 1 <= int(max_steps) <= 500 or int(command_interval) < 1:
+            raise ValueError("max_steps must be in 1..500 and command_interval must be positive")
         self.opponent = str(opponent)
         self.seed = int(seed)
         self.max_steps = int(max_steps)
@@ -44,19 +62,20 @@ class KnownOpponentEnv:
             else:
                 ys = np.linspace(-650.0, 650.0, int(targets))
                 target_positions = [[-2100.0, float(y), 100.0] for y in ys]
+            target_positions = (np.asarray(target_positions)*effective.scene_scale).tolist()
         self.adapter = HADStage3Adapter(int(red), int(blue), int(targets), max_steps=self.max_steps,
                                         target_positions=target_positions,
                                         blue_rule_style="rush",
                                         horizon_policy=self.horizon_policy,
                                         task_mode=task_mode, target_health=target_health,
-                                        spatial_dim=spatial_dim, plane_altitude=plane_altitude)
+                                        spatial_dim=spatial_dim, plane_altitude=plane_altitude, effective_config=effective)
         self.task_mode = self.adapter.task_mode
         self.target_health = self.adapter.target_health
         self.spatial_dim = self.adapter.spatial_dim
         self.plane_altitude = self.adapter.plane_altitude
         if executor is None:
             from .rules import RuleExecutor
-            executor = RuleExecutor()
+            executor = RuleExecutor(guard_distance=700.*effective.scene_scale)
         self.executor = executor
         self.previous = Grouping((), self.adapter.red_ids)
         self.blue_grouping = Grouping(())
@@ -110,7 +129,7 @@ class KnownOpponentEnv:
         return DecisionState(self.adapter.step_count, self.max_steps, self.opponent, red,
                              entities(self.adapter.agent_states("Blue")),
                              entities(self.adapter.target_states()), self.previous.prune(live_red),
-                             self.executor.memory(), dict(self.executor.last_actions), self.adapter.spatial_dim)
+                             self.executor.memory(), dict(self.executor.last_actions), self.adapter.spatial_dim, self.adapter.scene_scale)
 
     def step(self, grouping: Grouping) -> tuple[DecisionState, float, bool, dict]:
         if self.done:
@@ -174,6 +193,9 @@ class KnownOpponentEnv:
                    bool(self.done and float(physical_info.get("outcome_red", 0.0)) > 0.0))
         delta = int(self.adapter.step_count - start)
         info = {**self.adapter.env.task_info(),
+                "env_agent_type": self.env_agent_type,
+                "env_agent_action_type": self.env_agent_action_type,
+                "effective_config": self.effective_config.to_dict(),
                 "spatial_dim": self.spatial_dim, "plane_altitude": self.plane_altitude,
                 "delta": delta, "success": success, "physical_steps": self.adapter.step_count,
                 "event_reason": event_reason, "events": all_events,
@@ -200,6 +222,9 @@ class KnownOpponentEnv:
                 "command_interval": self.command_interval, "seed": self.seed,
                 "group_max_size": self.group_max_size,
                 "task_mode": self.task_mode, "target_health": self.target_health,
+                "env_agent_type": self.env_agent_type,
+                "env_agent_action_type": self.env_agent_action_type,
+                "effective_config": self.effective_config.to_dict(),
                 "spatial_dim": self.spatial_dim, "plane_altitude": self.plane_altitude,
                 "horizon_policy": self.horizon_policy,
                 "executor_type": type(self.executor).__name__}
@@ -207,6 +232,9 @@ class KnownOpponentEnv:
     def restore(self, snapshot: dict) -> DecisionState:
         if (snapshot["opponent"] != self.opponent or snapshot["max_steps"] != self.max_steps
                 or snapshot.get("task_mode") != self.task_mode
+                or snapshot.get("env_agent_type") != self.env_agent_type
+                or snapshot.get("env_agent_action_type") != self.env_agent_action_type
+                or snapshot.get("effective_config") != self.effective_config.to_dict()
                 or snapshot.get("spatial_dim") != self.spatial_dim
                 or snapshot.get("plane_altitude") != self.plane_altitude
                 or snapshot.get("target_health") != self.target_health

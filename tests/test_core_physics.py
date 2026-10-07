@@ -59,9 +59,9 @@ def set_pose(agent, position, velocity=(20., 0., 0.)):
 
 
 def test_attack_boundary_scalar_vector_agree_and_remain_finite():
-    values = [499.999, 500., 500.001]
+    values = [199.999, 200., 400., 400.001]
     expected = [attack_intensity_ratio(value) for value in values]
-    assert expected == [1, 0, 0]
+    assert expected == [1, 1., 0, 0]
     np.testing.assert_array_equal(attack_intensity_ratio(values), expected)
     np.testing.assert_array_equal(attack_intensity_ratio(np.asarray(values)), expected)
 
@@ -74,7 +74,7 @@ def test_exact_boundary_in_a_physical_step_is_finite():
     set_pose(env.targets[0], [0., 0., 100.], [0., 0., 0.])
     env.step_physics(np.zeros((2, 3)))
     assert np.isfinite(physical_state(env)).all()
-    assert env.targets[0].Health == 1.2
+    assert env.targets[0].Health == 2.
 
 
 def test_heterogeneous_step_preserves_each_roles_existing_reward():
@@ -139,38 +139,20 @@ def test_invalid_action_rejected_before_any_physical_mutation(invalid):
     assert all(agent.acceleration == [0., 0., 0.] for agent in env.agents)
 
 
-def legacy_step_order(env, actions):
-    """Frozen pre-workbench orchestration, independent of World.step."""
-    for i in range(len(env.alive_agents)):
-        for j in range(len(env.alive_agents)):
-            if i > j and distance(env.alive_agents[i].position, env.alive_agents[j].position) <= AvoidanceDistance:
-                env.alive_agents[i].Health = 0
-                env.alive_agents[j].Health = 0
-    for agent, action in zip(env.agents, actions):
-        agent.set_flying_action((np.array(action) * agent.aMax).tolist())
-        agent.set_function_action(agent.choose_function_ruled_action(env.world))
-    old_world = copy.deepcopy(env.world)
-    for agent in env.world:
-        agent.update_status(old_world)
-    env.update_alive_agents()
-
-
 @pytest.mark.parametrize("seed", [4, 31, 8123])
-def test_optional_recording_preserves_legacy_order_and_trajectory(seed):
+def test_optional_recording_preserves_current_physics_trajectory(seed):
     env = HADEnv(4, 4, 2)
     env.reset(seed=seed, evaluate=True)
-    reference, silent = copy.deepcopy(env), copy.deepcopy(env)
+    silent = copy.deepcopy(env)
     env.record_events = True
     rng = np.random.default_rng(seed)
     for _ in range(30):
         actions = rng.uniform(-1, 1, (8, 3)).astype(np.float32)
-        legacy_step_order(reference, actions)
         env.step_physics(actions)
         silent.step_physics(actions)
-        np.testing.assert_array_equal(physical_state(env), physical_state(reference))
         np.testing.assert_array_equal(physical_state(env), physical_state(silent))
-        assert env.is_terminal() == reference.is_terminal()
-        assert [a.IsFire for a in env.agents] == [a.IsFire for a in reference.agents]
+        assert env.is_terminal() == silent.is_terminal()
+        assert [a.IsFire for a in env.agents] == [a.IsFire for a in silent.agents]
         assert silent.last_physics_events == []
         json.dumps(env.last_physics_events, allow_nan=False)
 
@@ -185,11 +167,11 @@ def test_damage_events_explain_snapshot_distance_and_firing_self_destruction():
     env.step_physics(np.zeros((2, 3)))
     events = env.last_physics_events
     hit = next(event for event in events if event["kind"] == "attack_damage")
-    # Blue moves to 120 before taking damage from the Red snapshot at zero.
-    assert (hit["source_id"], hit["target_id"], hit["distance"]) == (0, 1, 120.)
-    assert hit["source_position"] == [0., 0., 100.]
+    # Hit distance is 100 at task start; the blue rendered endpoint is 120.
+    assert (hit["source_id"], hit["target_id"], hit["distance"]) == (0, 1, 100.)
+    assert hit["source_position"] == [20., 0., 100.]
     assert hit["target_position"] == [120., 0., 100.]
-    assert (hit["health_before"], hit["health_after"], hit["damage"]) == (1., 0., 10.)
+    assert (hit["health_before"], hit["health_after"], hit["damage"]) == (1., 0., 1.)
     assert hit["damage_scope"] == "source_unclipped" and hit["simultaneous"]
     assert any(e["kind"] == "fire" and e["source_id"] == 0 for e in events)
     assert any(e["kind"] == "self_destruct" and e["target_id"] == 0 for e in events)
