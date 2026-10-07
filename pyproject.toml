@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "had-env"
 dynamic = ["version"]
-description = "Standalone heterogeneous attack-defense simulation with simultaneous multi-agent APIs"
+description = "SkyHAD: heterogeneous aerial attack-defense with particle and six-DOF UAV models"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -26,7 +26,12 @@ viewer = [
 ]
 test = ["pytest>=8.4,<9"]
 
+[project.urls]
+Repository = "https://github.com/Sailero/SkyHAD"
+Documentation = "https://github.com/Sailero/SkyHAD/tree/main/docs"
+
 [project.scripts]
+skyhad = "had_env.workbench.cli:main"
 had-workbench = "had_env.workbench.cli:main"
 
 [tool.setuptools]

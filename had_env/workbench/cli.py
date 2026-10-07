@@ -20,7 +20,7 @@ WORKBENCH_ROOT = _output_root()
 
 
 def parser():
-    root = argparse.ArgumentParser(prog="had-workbench", description="HAD 科研工作台：独立调试、记录、回放与对比")
+    root = argparse.ArgumentParser(prog="skyhad", description="SkyHAD 科研工作台：独立调试、记录、回放与对比")
     subs = root.add_subparsers(dest="command")
     for name in ("record", "live"):
         p = subs.add_parser(name, help="录制完整回合" if name == "record" else "启动独立交互调试会话")
@@ -150,7 +150,7 @@ def _show(args):
     from .gui import WorkbenchWindow
     from .recording import ReplayEpisode, load_episode
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    app.setApplicationName("HAD Research Workbench")
+    app.setApplicationName("SkyHAD Research Workbench")
     window = WorkbenchWindow()
     controller = None
     live_timer = None

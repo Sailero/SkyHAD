@@ -84,7 +84,7 @@ class WorkbenchWindow(QMainWindow):
     def __init__(self, episode: ReplayEpisode | None = None, parent=None):
         super().__init__(parent)
         ensure_fonts()
-        self.setWindowTitle("HAD · 攻防研究工作台")
+        self.setWindowTitle("SkyHAD · 攻防研究工作台")
         self.resize(1580, 1020)
         self.episode: ReplayEpisode | None = None
         self.comparison: ReplayEpisode | None = None
@@ -120,7 +120,7 @@ class WorkbenchWindow(QMainWindow):
         bar = QToolBar("实验与视图", self)
         bar.setMovable(False)
         self.addToolBar(bar)
-        title = QLabel("HAD  /  RESEARCH")
+        title = QLabel("SkyHAD  /  RESEARCH")
         title.setStyleSheet("font-size: 17px; font-weight: 700; color: #a8ccff; padding-right: 14px")
         bar.addWidget(title)
         for label, callback, shortcut in (
@@ -816,7 +816,7 @@ class WorkbenchWindow(QMainWindow):
         self.seek(item.data(Qt.ItemDataRole.UserRole))
 
     def _open_dialog(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "打开 HAD 回合", "", "HAD 记录 (*.json *.json.gz *.jsonl.gz);;所有文件 (*)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "打开 SkyHAD 回合", "", "HAD 记录 (*.json *.json.gz *.jsonl.gz);;所有文件 (*)")
         for path in paths:
             try:
                 self.load_episode(path)
@@ -876,7 +876,7 @@ class WorkbenchWindow(QMainWindow):
             device.setFileName(str(path))
             device.setSize(QSize(width, height))
             device.setViewBox(QRectF(0, 0, width, height))
-            device.setTitle("HAD recorded battlefield")
+            device.setTitle("SkyHAD recorded battlefield")
         else:
             device = QPdfWriter(str(path))
             device.setResolution(120)
@@ -897,7 +897,7 @@ class WorkbenchWindow(QMainWindow):
             painter.fillRect(QRectF(0, 0, width, height), QColor("#ffffff" if light else "#111c2d"))
             painter.setPen(QColor("#233850" if light else "#dce6f3"))
             painter.setFont(QFont("Microsoft YaHei UI", 15))
-            painter.drawText(QPointF(24, 32), "HAD / recorded battlefield")
+            painter.drawText(QPointF(24, 32), "SkyHAD / recorded battlefield")
             painter.setFont(QFont("Microsoft YaHei UI", 9))
             painter.drawText(QRectF(24, 45, width-48, 52), Qt.TextFlag.TextWordWrap, self.metadata_label.text() + "\n" + self.step_label.text())
             self.xy_view.render(painter, QRectF(0, 105, main_width, main_height), self.xy_view.viewport().rect(), Qt.AspectRatioMode.KeepAspectRatio)

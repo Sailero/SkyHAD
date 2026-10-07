@@ -11,7 +11,7 @@ try {
     } else {
         & $HADPython -B -m had_env.workbench live
     }
-    if ($LASTEXITCODE -ne 0) { throw "HAD Workbench exited with code $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "SkyHAD Workbench exited with code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }

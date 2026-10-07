@@ -1,6 +1,6 @@
 # SkyHAD 3.0.0 接口与协议
 
-项目显示名称为 **SkyHAD**，Python 发行包保持 `had-env`，导入路径保持 `had_env`。历史命令 `had-workbench` 保留；`skyhad` 是规划中的新入口。软件版本、物理协议、任务协议是不同标识：运行时以 `info["core_version"]`、`info["physics_protocol"]` 和录制任务配置为准。数学建模与动力学来源见 [MODELING.md](MODELING.md)，实际验证范围见 [VALIDATION.md](VALIDATION.md)。
+项目显示名称为 **SkyHAD**，Python 发行包保持 `had-env`，导入路径保持 `had_env`。历史命令 `had-workbench` 保留；`skyhad` 为新入口。软件版本、物理协议、任务协议是不同标识：运行时以 `info["core_version"]`、`info["physics_protocol"]` 和录制任务配置为准。数学建模与动力学来源见 [MODELING.md](MODELING.md)，实际验证范围见 [VALIDATION.md](VALIDATION.md)。
 
 ## 统一工厂与配置
 
