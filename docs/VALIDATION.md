@@ -71,3 +71,10 @@ $env:MKL_NUM_THREADS = '1'
 
 正常使用窗口前，移除上述 Qt/SDL 离屏环境变量。示例评估仅验证工具链，不是算法性能比较结论。
 此前的物理热点提速和 Qt 显示优化被保留，但这次拆分不宣称新增训练吞吐或帧率收益。
+
+
+## SkyHAD 3.0 baseline and cleanup
+
+Baseline commit `cf26fd4`, tag `baseline-20261007`: complete suite 76 passed, 33 failed, 2 skipped (23.82 s). Failures include stale historical physics fixtures, obsolete 7-column observations and removed global RNG snapshots; final verification will report each resolution.
+
+Archived existing `dist/`, `outputs/` and generated `build/` at `E:/Code/.had-backups/skyhad-history-20261007` to preserve old releases and experiment artifacts outside the source. Kept the working virtual environment and editable metadata until final installation. Removed an unreachable standalone demo importing missing training modules; no live API removed. Every tracked source, resource, example and regression test has an active role. Version now comes solely from `had_env.__version__`; physics protocol remains independently identified.

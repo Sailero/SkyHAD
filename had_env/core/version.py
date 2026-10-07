@@ -1,4 +1,6 @@
 """Physics protocol identity for the rebuilt, calibrated HAD environment."""
 
-CORE_VERSION = "had-workbench-2.1.0"
+from had_env import __version__
+
+CORE_VERSION = "skyhad-" + __version__
 PHYSICS_PROTOCOL = "rebuild-calibrated-v3-r7-target-initialization"

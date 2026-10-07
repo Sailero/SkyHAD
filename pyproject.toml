@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "had-env"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Standalone heterogeneous attack-defense simulation with simultaneous multi-agent APIs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,3 +43,6 @@ include = ["had_env*"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+
+[tool.setuptools.dynamic]
+version = {attr = "had_env.__version__"}
