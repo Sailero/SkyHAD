@@ -24,6 +24,7 @@
 | rc1 最终源码回归 | 182 | 2 | 2 | 36.83 秒 | `rc1-full.txt`、`rc1-full.xml` |
 | main 合并后 | 182 | 2 | 2 | 36.61 秒 | `merged-full.txt`、`merged-full.xml` |
 | 本地更名及新环境 rc2 | 182 | 2 | 2 | 41.66 秒 | `renamed-full.txt`、`renamed-full.xml` |
+| 3.0.0 正式版 | 182 | 2 | 2 | 42.00 秒 | `release-full.txt`、`release-full.xml` |
 
 两项 skipped 都因为当前解释器没有安装可选依赖 Torch：`tests/test_workbench_rng.py` 的模块级导入，以及 `tests/test_workbench_integration.py` 的可选 Torch 集成测试。两条 warnings 是 PettingZoo 旧环境创建 API 的弃用提示。这里没有将未执行的 Torch 测试记为通过。
 
@@ -105,4 +106,6 @@ rc2 已完成新目录完整复测、依赖 `pip check`、`skyhad` 与历史 `ha
 
 独立安装验收确认 `had_env` 和 `make_env` 来自 wheel 的 target、目标 PNG 资源完整、公开导入不加载 Qt/Pygame/Torch；覆盖各模型控制的原生、Parallel、MPE，粒子 position、Open-SCORE、分组、录制往返与精确分支，并实际运行 Qt 离屏窗口和 Pygame 帧。FlightSession 分支为内存精确分支；JSON 可移植快照续执行通过 SimulationSession/grouping 验证，二者不混称。报告为 `wheel-acceptance-results-rc2.json`。
 
-最终 3.0.0 发行版、最终提交与推送验证将于完成后追加。
+正式版 `had_env-3.0.0-py3-none-any.whl` 为 **172585 字节**，再次独立安装并运行相同验收，**67/67 通过，28.925 秒**；报告为 `wheel-acceptance-results-final.json`。新目录的模块版本与安装元数据均为 **3.0.0**。正式版完整 pytest 为 **182 passed、2 skipped、2 warnings，42.00 秒**。
+
+仓库位置为 [Sailero/SkyHAD](https://github.com/Sailero/SkyHAD)，正式恢复节点为 `v3.0.0`。基线、清理、兼容、动力学、工作台、文档与安装阶段都有独立提交和标签，完整列表见 [README](../README.md)。最终发布使用 main 的普通推送，保持已有提交历史。
