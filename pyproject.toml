@@ -31,7 +31,7 @@ where = ["."]
 include = ["had_env*"]
 
 [tool.setuptools.package-data]
-"had_env.core" = ["resources/*.png"]
+"had_env" = ["resources/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
