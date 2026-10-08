@@ -11,23 +11,12 @@ def make_env(scenario_name="defense", *, config=None, **kwargs):
     values = load_config(config)
     values.update(kwargs)
     api = values.pop("api", "parallel")
-    if api == "open_score":
-        from had_env.open_score_compat import make_open_score_env
-        if 'max_cycles' in values:
-            values['max_steps'] = values.pop('max_cycles')
-        names = ('red_count', 'blue_count', 'target_count')
-        legacy = ('N_R', 'N_B', 'K')
-        if any(k in values for k in names+legacy):
-            roster = {old: values.pop(new, values.pop(old, default))
-                      for new, old, default in zip(names, legacy, (4, 4, 2))}
-            values['scale'] = roster
-        return make_open_score_env(**values)
     if api == "grouping":
         from had_env.grouping.environment import KnownOpponentEnv
         values.setdefault('spatial_dim', 3)
         return KnownOpponentEnv(config=values)
     if api not in ("parallel", "mpe"):
-        raise ValueError("api must be parallel, mpe, grouping or open_score")
+        raise ValueError("api must be parallel, mpe or grouping")
     effective = EnvConfig.from_values(values)
     scenario_names = ("red_count", "blue_count", "target_count", "red_scouts", "red_disturbers",
                       "blue_scouts", "blue_disturbers", "initialization", "evaluate", "target_region",
