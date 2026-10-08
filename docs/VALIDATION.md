@@ -49,6 +49,10 @@ The following checks ran on 2026-10-08 and 2026-10-09:
 
 The complete environment suite exposes upstream PettingZoo and Pygame deprecation warnings. The base-only run has no GUI dependency and imports no Pygame, Qt or Torch. The package was installed into a separate runtime and exercised outside the source checkout; source-only imports were not used as evidence of wheel installation.
 
+After integration into main, the full suite passed again: **102 passed, 3 upstream deprecation warnings in 15.74 seconds**. The final v4.0.0 wheel contains 37 package/resource files and is **78,295 bytes**, excluding third-party dependencies. Its packaged files match the merged source byte for byte. There are no desktop entry points, Qt/Torch dependencies, old core wrappers or algorithm-specific modules in the wheel.
+
+The repository ships **55 files**; its source archive is approximately **0.53 MB**, including the mathematical PDF, editable source and retained tests. Local virtual environments, experiment output, build/cache files and the user-supplied reference article are not distributed. Validation artifacts are archived outside the source tree. All 33 formulation pages were rendered and checked for theme/page correspondence, formula overflow, column crossings and footer clearance; independent code/math review found no outstanding issues.
+
 Workbench checks include real offscreen Qt event loops and owned workers, recording, replay, exact saved branching, legacy v3 continuation, and PNG/SVG/PDF/MP4 export. Its independent runtime contains the original v3 environment wheel, so changing the main environment checkout does not change workbench behavior. Workbench tests and launcher are maintained in [SkyHAD-Workbench](https://github.com/Sailero/SkyHAD-Workbench).
 
 These checks establish implementation consistency and interface behavior. They do not report trained-policy performance or aircraft parameter identification. The simulator's flight and boundary assumptions are stated in [MODELING.md](MODELING.md).
