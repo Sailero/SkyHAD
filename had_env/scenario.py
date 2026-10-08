@@ -13,7 +13,8 @@ class Scenario:
     """Counts include all roles; unallocated team members are attackers.
 
     The original random reset and uniform showcase reset remain available.
-    ``evaluate=True`` uses the original separated blue starting region.
+    ``evaluate`` is retained for compatibility and does not change sampling;
+    Blue uses the same ``blue_spawn_x`` interval for either value.
     """
 
     red_count: int = 4

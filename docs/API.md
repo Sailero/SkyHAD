@@ -38,7 +38,7 @@ env = make_env(config={"env_agent_type": "UAV_fixedwing", "task_mode": "damage"}
 | `red_spawn_annulus`, `blue_spawn_x`, `spawn_altitude` | Defender spawn radii, attacker x interval, aircraft altitude interval |
 | `plane_altitude` | Fixed 2D altitude, default `100*scene_scale` |
 | `fire_range` | Positive automatic-fire threshold, at most the full-damage radius |
-| `initialization`, `evaluate` | Aircraft `random`/`uniform` layout and separated evaluation blue region |
+| `initialization`, `evaluate` | Aircraft `random`/`uniform` layout; `evaluate` is retained for compatibility and does not change sampling |
 | `target_initialization`, `target_positions` | Random/fixed assets; explicit positions select fixed layout |
 | `reward_weights` | Optional four-component survival shaping weights; rejected for damage |
 | `render_mode`, `record_events` | None/human/rgb_array and detailed physical events |
