@@ -43,7 +43,7 @@ env = make_env(config={"env_agent_type": "UAV_fixedwing", "task_mode": "damage"}
 | `reward_weights` | Optional four-component survival shaping weights; rejected for damage |
 | `render_mode`, `record_events` | None/human/rgb_array and detailed physical events |
 
-Scene scale affects default geometry and interaction distances, not aircraft mass, inertia, wing size, or rotor size. Explicit geometry values are final meters. `reset(seed=...)` reproduces the complete initial layout and action-space sampling streams. Calling reset without a new seed advances the instance's own stream.
+Scene scale affects default geometry and interaction distances, not aircraft mass, inertia, wing size, or rotor size. Explicit geometry values are final meters. For Parallel/MPE, `reset(seed=...)` reproduces the complete initial layout and action-space sampling streams; reset without a new seed continues the instance's existing initialization stream.
 
 ## Actions
 
@@ -70,7 +70,7 @@ Let A be the aircraft count, K the asset count, and E=A+K. Entity rows have 11 c
 relative_position[3], relative_velocity[3], health, alive, is_red, is_blue, is_target
 ```
 
-Rows exclude self and otherwise preserve fixed entity order. Dead rows are zero. Positions are normalized by the world diagonal; velocities by twice the model reference speed. Rows are not hidden by Scout field of view, and they do not encode the Attack/Scout/Disturb role. `info["observation_entities"]` identifies row order.
+Rows exclude self and otherwise preserve fixed entity order. Dead rows are zero. Positions are normalized by the world diagonal; velocities by twice the model preset's maximum speed: 240 m/s for particle, 60 m/s for fixed-wing, and 40 m/s for quadrotor. Rows are not hidden by Scout field of view, and they do not encode the Attack/Scout/Disturb role. `info["observation_entities"]` identifies row order.
 
 | Model/control | Local observation | `state()` length |
 | --- | --- | --- |
@@ -116,10 +116,12 @@ For defender MARL, actor losses use the participation mask from before the actio
 
 `make_env(api="grouping", ...)` or `KnownOpponentEnv` provides upper-level assignments. Direct KnownOpponentEnv defaults to particle 2D (UAV 3D), 8 red/8 blue/2 assets, seed 0, horizon 100, command interval 5; the common factory defaults to 3D.
 
+Grouping `reset()` reseeds from its saved seed on every call; `reset(seed=...)` updates that saved seed.
+
 `Grouping(groups, reserve)` contains `Group(target, members)`: target is a stable local asset index, and members are global aircraft IDs. Every surviving defender must appear exactly once, in a nonempty group or reserve. The default group-size cap is None. Casualties prune existing relationships without automatically reassigning survivors.
 
 The blue upper rule is reactive, balanced, or concentrated, and the lower navigation rule is rush. Defender flight actions come from RuleExecutor. Only acceleration intentions are supported in this interface; position and actuator learning use the native interfaces with an external blue actor.
 
-A macro step advances at least one physical step and returns at an absolute command tick, a nonterminal casualty, or episode end. `info["delta"]` records elapsed steps. Damage macro reward sums negative step damage without intra-macro discounting. Survival pays terminal defender success 1, otherwise 0, and its `horizon_policy=red_win/draw/blue_win` is a grouping convention, distinct from native sampling truncation. A discounting learner should account explicitly for macro duration.
+A macro step advances at least one physical step and returns at an absolute command tick, a nonterminal casualty, or episode end. If no defender survives while the episode remains active, it continues autonomously to episode end instead of returning at casualty or command boundaries; blue commands still refresh at their usual opportunities, and `info["no_red_continuation"]` is True. `info["delta"]` records elapsed steps. Damage macro reward sums negative step damage without intra-macro discounting. Survival pays terminal defender success 1, otherwise 0, and its `horizon_policy=red_win/draw/blue_win` is a grouping convention, distinct from native sampling truncation. A discounting learner should account explicitly for macro duration.
 
 In-memory `snapshot()` and `restore()` support independent continuation of the grouping environment under identical configuration. Desktop portable recording and branching are part of the separately versioned workbench.
