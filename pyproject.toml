@@ -17,22 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 render = ["pygame>=2.5,<3"]
-viewer = [
-  "pygame>=2.5,<3",
-  "PySide6>=6.8,<7",
-  "matplotlib>=3.7,<4",
-  "imageio>=2.31",
-  "imageio-ffmpeg>=0.5",
-]
 test = ["pytest>=8.4,<9"]
 
 [project.urls]
 Repository = "https://github.com/Sailero/SkyHAD"
 Documentation = "https://github.com/Sailero/SkyHAD/tree/main/docs"
-
-[project.scripts]
-skyhad = "had_env.workbench.cli:main"
-had-workbench = "had_env.workbench.cli:main"
 
 [tool.setuptools]
 py-modules = ["make_env"]
