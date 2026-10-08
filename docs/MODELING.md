@@ -1,251 +1,254 @@
-# SkyHAD 任务与动力学建模
+# SkyHAD v4 mathematical model
 
-本文按 SkyHAD 3.0.0 的实现区分数学完整状态、公开模型输入、环境任务、控制意图和物理执行器。接口字段见 [API.md](API.md)。环境不绑定训练算法；gamma 是调用方的折扣约定，只有明确接受 gamma 的兼容封装参与奖励折扣/shaping。
+The [33-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There is one overview page and two pages for each model/control/task combination. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
 
-## 联合博弈与固定对手 POMDP
+| Model | Control interfaces | Tasks | Themes |
+| --- | --- | --- | --- |
+| Particle | Acceleration, absolute position | Survival, Damage | 4 |
+| Fixed wing | Acceleration, direct actuator, absolute position | Survival, Damage | 6 |
+| Quadrotor | Acceleration, direct actuator, absolute position | Survival, Damage | 6 |
 
-双方独立学习、同时提交动作时，环境是部分可观测随机博弈 POSG：联合动作 `(a_R,a_B)` 决定共同物理转移，各方保留自己的策略/历史/奖励。当前对手待提交动作不属于己方可观察量。
+The primary formulation is three-dimensional. Planar particle compatibility is a setting of the particle themes, not a seventeenth theme. Grouping is a general decision-layer extension. It currently executes acceleration controls and does not define a universal navigation action for every physical model.
 
-固定蓝方策略 piB 后，红方可建模为
+## Defender perspective and complete state
 
-\[
-\mathcal M=(\mathcal S,\mathcal A,T,\mathcal O,Z,R,\gamma,\rho_0,H).
-\]
-
-T 是积分固定蓝策略的转移核；O 为实际红方观测空间，Z 是状态到观测的映射/核；rho0 为 reset 分布；H 为任务时限或采样预算。蓝策略的隐状态、承诺分配、决策时钟和随机流必须纳入 S，才能保持 Markov 性。原生同步接口本身不假定蓝方固定；KnownOpponentEnv 与 Open-SCORE 提供固定规则过程。
-
-完整 S 包含所有 Attack、Scout、Disturb、Target 的稳定 Id/角色/阵营、位置 p、速度 v、HP、存活位、逐步及累计 D；物理时间、任务模式与边界；红蓝分组/导航承诺、reserve、上层决策时钟、下层最后动作/必要记忆，以及影响未来的策略内部状态。UAV 增加机体到世界单位四元数 q4 和机体系角速度 omega3。配置和 seed 是回合固定上下文；精确分支还保留 RNG 状态。
-
-公开观测无传感噪声，Z 为确定性映射。原生相对实体表公开全部其他存活实体的 p/v/HP/存活和阵营类型位，没有根据 Scout 探测扇区隐藏实体。Scout 功能规则/辅助奖励保留，但不能据此宣称 actor 输入只有 Scout 视野。相对表仍可能遗漏绝对边界位置、自身刚体、角色细分、对手承诺、时钟和策略记忆，因此不等于完整可观测 Markov S。
-
-particle 的原生 11E 集中 state 没有时钟、累计 D 和上层承诺。有限时限影响价值时，应显式补入剩余时间。D 是计分/恢复状态，尽管下一步增量伤害通常无需累计值即可计算。UAV 增强 state 追加所有无人机 13D 刚体块和 `[cycle,D,is_damage]`，修复刚体转移与任务上下文的重要缺项；隐藏对手内部状态仍需另行处理。完整快照比训练 feature vector 包含更多信息。
-
-rho0 由实例私有 RNG 生成：目标 random/fixed，红方在目标附近环带，蓝方在来袭区域。二维/UAV 拒绝过近开局，不禁止后续碰撞。uniform 是独立展示初始化。固定翼 reset 建立参考配平水平飞行；四旋翼允许零速度。
-
-
-### 状态、观测和核的具体含义
-
-令无人机数为 N，目标数为 K，所有实体集合为 E。回合固定配置 c 包含场景尺度、边界、角色名册、模型参数、控制形式与目标初始 HP。配置确定后，完整状态可写为
+Let Red defenders be \(\mathcal R\), Blue opponents \(\mathcal B\), stationary protected assets \(\mathcal P\), and UAVs \(\mathcal U=\mathcal R\cup\mathcal B\). Write \(N=|\mathcal U|\), \(K=|\mathcal P|\), \(M=N+K\). Attack, Scout and Disturb are fixed roles, separate from team membership. A complete state, conditional on the episode configuration \(C\), is
 
 \[
-s_t=(\{p_i,v_i,h_i,\ell_i,r_i,\chi_i\}_{i\in E},
-\{q_i,\omega_i\}_{i\in\mathrm{UAV}},\{D_k\}_{k=1}^K,t,g_R,g_B,m_R,m_B).
+s_t=(\{x_i,h_i,r_i,c_i,\mathrm{id}_i\}_{i\in\mathcal U},
+\{p_k,h_k,D_k\}_{k\in\mathcal P},t,\zeta_t).
 \]
 
-| 分量 | 空间/单位 | 为什么属于状态 |
-|---|---|---|
-| p_i, v_i | 三维米、米/秒 | 决定运动、碰撞、攻击距离和扇区方向 |
-| h_i, ell_i | 非负 HP、存活布尔值 | 决定参与碰撞/功能动作/奖励及终止；ell_i 由 HP 按对应阈值派生 |
-| r_i, chi_i | Attack/Scout/Disturb/Target 与阵营 | 决定自动功能规则、哪些攻击源能命中该实体 |
-| q_i, omega_i | 单位 S³ 四元数、三维 rad/s | 决定力与力矩的方向，以及下一步姿态和速度 |
-| D_k | 非负累计原始伤害 | damage 最终报告、精确回合恢复和统计的计分状态 |
-| t | 已执行物理步数 | 决定时限、周期分配机会和剩余任务时长 |
-| g_R, g_B | 分组、目标归属及 reserve | 在两次上层决策之间持续影响下层导航 |
-| m_R, m_B | 会影响未来的策略记忆 | 有记忆的固定对手/执行器需要该分量；当前刚体内环无隐藏积分器 |
+Here \(x_i=(p_i,v_i)\) for particles and \(x_i=(p_i,v_i,q_i,\omega_i)\) for rigid vehicles. Health \(h_i>0\) determines participation. Targets start at finite health 2 by default and UAVs at 1; \(D_k\) is cumulative raw asset damage. Configuration fixes bounds, roster, parameters, control interface and task. Persistent assignments, reserve, decision clocks and policy memory belong in \(\zeta_t\) when an extension or opponent uses them. The implemented rigid-body controllers have no hidden integrators.
 
-变量并非都独立：存活位派生自 HP，q 的四个存储量只有三个姿态自由度。随机数生成器状态用于精确复现；在概率模型中可等价视作每步从规定随机核采样，不必把伪随机实现细节提供给 actor。
+Last commands, functional flags, previous positions and step-damage counters are overwritten transition records; snapshots retain them for reward/event replay. An RNG state is needed for exact deterministic replay, but is not an actor feature. In a probabilistic model it can instead be represented by the stipulated random law.
 
-原生存活 agent i 看到的每个其他实体 j 的十一列为
+Native execution accepts navigation actions for both teams. With both teams learning, the system is a partially observable stochastic game. After specifying and freezing an external Blue policy \(\pi_B\), Red has a cooperative Dec-POMDP:
 
 \[
-o_{ij}=\left[\frac{p_j-p_i}{L_c},\frac{v_j-v_i}{2V_{max,c}},
-h_j,1,\mathbf1_{Red},\mathbf1_{Blue},\mathbf1_{Target}\right],
-\quad L_c=\sqrt{\sum_{a=x,y,z}(b_a^+-b_a^-)^2}.
-\]
-
-死亡实体整行置零，行顺序固定；这些阵营标志不编码 Attack/Scout/Disturb 的角色细分。UAV 自身块提供未归一化 `[p_i,v_i,q_i,omega_i]`，particle position 自身块提供 `[p_i,v_i]`。死亡 damage agent 的整个输入为零。Z 是该确定性编码：`Z(o|s)=delta(o-encode(s))`。Open_Score 的十列及 padding 属于另一观测空间，不能把其张量解释为原生十一列。
-
-对固定蓝策略，转移核定义为
-
-\[
-T(s'\mid s,a_R)=\int \delta\!\left(s'-F_c(s,a_R,a_B)\right)
-\pi_B(da_B\mid o_B,m_B).
-\]
-
-F_c 是下文的运动积分、边界、碰撞及同时交互组成的确定性转移。reactive 蓝方的随机分配在其决策时钟采样；原生 actuator 直接接收蓝动作时，应使用联合 F_c，而不是假定上述 piB 存在。观测空间 O 是所有可能编码值的集合，Z 是生成这些值的核，二者含义不同。
-
-如果策略维护信念 b_t(s)，标准更新为
-
-\[
-b_{t+1}(s')\propto Z(o_{t+1}\mid s')\int T(s'\mid s,a_t)b_t(s)ds.
-\]
-
-该公式描述在遗漏对手记忆、承诺或自身绝对状态时如何利用历史推断，并不表示本仓库实现了信念滤波器。当前接口可直接接入无记忆策略，也可由算法维护历史。
-
-## 两种任务分别定义
-
-### Survival POMDP
-
-\[
-\mathcal M_{survival}=(\mathcal S_{survival},\mathcal A,T_{survival},\mathcal O,Z_{survival},R_{survival},\gamma,\rho_{0,survival},H_{survival}).
-\]
-
-S 使用目标实际剩余 HP。A 为所选接口的红方飞行输入或 Grouping，蓝方由固定 piB 决定。T 包含运动、碰撞、自动开火、攻击/干扰扣血和开火者自毁；O/Z 按接口实际布局。任一目标 HP<1e-3 时蓝胜，蓝攻击者 HP<1e-3 全灭时红胜；红全灭不独立触发全局结束。
-
-原生红方默认 `R_t=10*outcome_red`，蓝方相反；显式 reward_weights 才改用四维 latent 加权信号。分组 R 为宏步终局红胜指标 0/1，不是原生 ±10。H 在 Parallel/Flight 为采样上限，到时 truncation；分组 survival 的 horizon_policy 明确规定 red_win/draw/blue_win，属于有限任务规则。gamma 由算法选择，当前 KnownOpponentEnv 宏奖采用 gamma=1 的累计约定。
-
-### Damage POMDP
-
-\[
-\mathcal M_{damage}=(\mathcal S_{damage},\mathcal A,T_{damage},\mathcal O,Z_{damage},R_{damage},\gamma,\rho_{0,damage},H_{damage}).
-\]
-
-S 包含目标固定初始 HP 和逐目标累计 D，不设目标伤害预算。T 继续执行飞行、碰撞、攻击和自毁，目标不因攻击扣 HP/死亡。蓝攻击者 HP<=0 全灭才自然结束，红全灭后的目标损失仍属于红方回报。
-
-A 随所选接口而变，O/Z 使用对应实际布局及死亡槽规则；rho0 与 survival 共享几何采样方式，但 task_mode 和计分状态不同。gamma 由算法或兼容构造定义，H 是该配置的采样上限。
-
-\[
-d_t=\sum_{k=1}^K\sum_b d_{b\to k,t},\qquad
-D_T=\sum_{t=0}^{T-1}d_t,\qquad
-R^R_t=-d_t,\quad R^B_t=d_t.
-\]
-
-d 是所有来源在 HP 截断前的原始贡献，不除队伍人数/目标数/HP。报告 episode_returns 为未折扣 ±D，算法可另优化折扣和。每个队员收到全队 R，不能再对 agent 奖励求和。rho=D/N_B 是兼容诊断而非原生奖励。H 到时保留 bootstrap，不附加胜负或存活奖。
-
-
-### 伤害函数、两任务的状态差异与奖励时序
-
-令 I_b 为碰撞检查后蓝 Attack 的自动开火位，r_in/r_out 为对应实例的内/外半径。共同步开始位置产生
-
-\[
-\eta(d)=\begin{cases}1&d<r_{in},\\
-(r_{out}-d)/(r_{out}-r_{in})&r_{in}\le d<r_{out},\\
-0&d\ge r_{out},\end{cases}\qquad
-L_k=\sum_{b\in BlueAttack}I_b\,\eta(\|p_b-p_k\|).
-\]
-
-开火条件是严格 `d<fire_range`，而 eta 在内半径边界连续为 1；触发条件和爆炸伤害衰减是两个不同判断。同一来源可对爆炸范围内多个敌方实体贡献伤害，且本步多个来源的贡献相加。
-
-survival 目标更新 `h'_k=max(0,h_k-L_k)`；damage 目标更新 `h'_k=h_k`、`D'_k=D_k+L_k`。移动无人机照常扣攻击及干扰伤害，开火者本步自毁。两个任务的动力学、动作和观测编码相同，但目标 HP 转移、自然终止条件和团队奖励函数不同。
-
-原生 survival 默认每个本步还在接口中的 agent 收到对应阵营的终局 ±10；终局后 Parallel 不再推进，避免重复领取。latent 的 hit、target、enemy 是既有几何辅助量，episode 槽已经含团队奖励，显式加权时应直接做四维点积。damage 每物理步只奖励 `-(D'−D)`，重复调用 info/reward 不增加 D，不再叠加 survival 终局奖励。
-
-## 运动学代理与刚体模型
-
-particle 保留运动学基准，每外部步 dt=1 s：先按步开始速度更新位置，再用加速度意图更新速度，并施加其速度/转向规则；二维固定 z、垂直速度为零。它没有姿态、惯量、机翼或旋翼，不用于推断实机 UAV 动力学。
-
-两种 UAV 均用 `[p3,v3,q4,omega3]`。世界为右手 ENU（东/北/上），机体为右手 FLU（前/左/上），R(q) 把机体向量旋转到世界；q 为 `[w,x,y,z]`，omega 用 rad/s。统一 Newton–Euler 方程为
-
-\[
-\dot p=v,\qquad m\dot v=R(q)F_B-mg e_3,
+\mathcal M_R=(\mathcal R,\mathcal S,\{\mathcal A_i\},T^{\pi_B},
+\{\mathcal O_i\},Z,R,\gamma,\rho_0,H),
 \]
 \[
-\dot q=\tfrac12q\otimes(0,\omega),\qquad
-J\dot\omega=M_B-\omega\times(J\omega).
+T^{\pi_B}(s'\mid s,a_R)=\int\delta_{F_C(s,a_R,a_B)}(s')
+\pi_B(da_B\mid o_B,\zeta_t).
 \]
 
-F 不含重力，g=9.81。积分用 RK4，默认子步 .01 s，1 s 外部步包含 100 子步；其他 dt 按 dt/ceil(dt/.01) 等分，每子步归一化 q。actuator 在外部步保持；高层意图保持，内环在每个 RK4 stage 用真实 stage 状态重新反馈，无隐藏积分器。
+The transition includes any opponent-memory update. A learned opponent may be frozen by the experiment; the native environment does not supply that navigation policy automatically. Automatic firing is a separate functional rule, described below.
 
-模型本身不把实际空速/姿态钳在参考控制界内。场景边界另裁剪位置并去掉朝外速度分量，这是任务边界规则。UAV 碰撞使用同步子步轨迹。当前无风、传感噪声和执行器动态，数值积分验证不等于实机系统辨识。
-
-## 近期研究与本项目的选择
-
-[Wang 等的固定翼六自由度研究](https://www.sciencedirect.com/science/article/pii/S294985542500070X) 于 2025 年 11 月在线发表，刊于 2026 年 6 月的 Journal of Automation and Intelligence。论文将高层速度指令和直接执行器控制分开，以 JSBSim 推进刚体状态。本项目据此区分控制意图、内环控制器和实际动力学；参数使用下面的 Aerosonde 数据，未采用该论文的 Skywalker X8 模型。
-
-[2025 年 Aerial Gym Simulator 论文](https://arxiv.org/abs/2503.01471) 为不同驱动形式的多旋翼提供模块化模型和几何控制器。本项目采用相同的分层思路：位置或加速度意图经过几何反馈与推力分配，直接执行器动作则进入刚体模型。具体方程与可复现参数来自下面的 Lee 模型；场景任务、观测和自动攻击规则沿用 HAD。
-
-## 固定翼：Aerosonde 数据与参考控制
-
-物理、机翼、气动、电机/螺旋桨参数取自 BYU MAGICC 官方 [Aerosonde 参数文件](https://github.com/byu-magicc/mavsim_public/blob/main/mavsim_python/parameters/aerosonde_parameters.py)。力学和控制代码独立编写，不导入其仿真器。传统 FRD（前/右/下）到 FLU 的 `C=diag(1,-1,-1)` 是 det=+1 的旋转；力、力矩和惯量均转换，`J_FLU=C J_FRD C^T`。
-
-| 物理量 | 当前值 |
-|---|---|
-| m | 11 kg |
-| J_FRD | `[[.8244,0,-.1204],[0,1.135,0],[-.1204,0,1.759]]` kg·m² |
-| 机翼面积/翼展/弦长 | .55 m² / 2.8956 m / .18994 m |
-| 空气密度/Oswald 系数 | 1.2682 kg/m³ / .9 |
-| 螺旋桨直径/电机电阻/空载电流/最高电压 | .508 m / .042 Ω / 1.5 A / 44.4 V |
-| 电机常数 | `60/(145*2*pi)` |
-| CQ0,CQ1,CQ2 | .005230, .004970, -.01664 |
-| CT0,CT1,CT2 | .09357, -.06044, -.1079 |
-
-alpha/beta 从机体相对气流求取，动态压强为 rho*Va²/2。纵向含升力/阻力/俯仰力矩与速率/升降舵项，横侧向含侧力/滚转/偏航力矩与 beta、滚转/偏航速率、副翼/方向舵项。失速用平滑线性升力/平板升力混合，M=50、alpha0=.47 rad。阻力使用 `CDp+(CL0+CLalpha*alpha)^2/(pi*e*AR)` 诱导阻力极曲线，再加当前速率/舵面项；保留的可选 CDalpha 不等于实际阻力公式。推力/反扭矩来自稳态直流电机平衡和二次螺旋桨拟合，无转速滞后。
-
-参考速度 18–30 m/s，配平/巡航 30，加速度意图尺度 5 m/s²；bank/pitch/path 参考限幅 45°/20°/15°，舵面 ±25°。trim 同时求解三轴力与三轴力矩平衡，reset 用该水平飞行解。高层控制按参考速度缓存并调度完整配平，使用对应的俯仰角、平衡侧滑角、全部舵面与油门作为反馈基准；18、24、30 m/s 的水平平衡均由六轴方程决定。
-
-控制限制及增益属于工程选择：航迹修正 .5，升降舵 pitch 反馈 -2/q 阻尼 .25，副翼 roll 反馈 .5/p 阻尼 -.08，方向舵 beta .8/偏航误差 .1，油门速度反馈 .08/爬升前馈 .7。这不是 BYU 完整自动驾驶器或最优控制参数。position 飞向/穿越目标，不瞬移、不悬停。
-
-
-气动公式中的机体系空速 `(u,v,w)` 先转换至 FRD，`Va=||(u,v,w)||`、`alpha=atan2(w,u)`、`beta=asin(v/Va)`。平滑失速系数为
+Decentralized actors use local histories \(\tau_i=(o_{i,0},a_{i,0},\ldots,o_{i,t})\). The defender objective is
 
 \[
-\sigma(\alpha)=\frac{1+e^{-M(\alpha-\alpha_0)}+e^{M(\alpha+\alpha_0)}}
-{(1+e^{-M(\alpha-\alpha_0)})(1+e^{M(\alpha+\alpha_0)})},
-\]
-\[
-C_L=(1-\sigma)(C_{L0}+C_{L\alpha}\alpha)+
-\sigma\,2\operatorname{sign}(\alpha)\sin^2\alpha\cos\alpha+
-C_{Lq}\frac{c q}{2V_a}+C_{L\delta_e}\delta_e.
+\pi_R^*\in\arg\max_{\pi_R}\mathbb E\left[\sum_{t=0}^{T-1}\gamma^tR_t\right],
+\qquad \pi_R(a_R\mid\tau_R)=\prod_{i\in\mathcal R}\pi_i(a_i\mid\tau_i).
 \]
 
-`L=qbar*S*CL`、`D=qbar*S*CD`，纵向 FRD 力为 `[-D cos(alpha)+L sin(alpha), Y, -D sin(alpha)-L cos(alpha)]`；横侧向系数由 beta、`bp/(2Va)`、`br/(2Va)` 和舵面输入组成。滚转/俯仰/偏航力矩分别乘 `qbar*S*b`、`qbar*S*c`、`qbar*S*b`。零空速时动态压强为零，速率分母仅使用有限小下界。
+The stopping time T is natural completion (possibly infinite); H limits sampled rollouts. A return observed at sampling truncation is partial, so a continuing-task critic retains the successor value. Treating H as a finite objective boundary would define a different learning task and require different target semantics. The environment does not prescribe an optimizer or discount factor. Centralized training may use privileged information; decentralized execution retains the actual local inputs.
 
-稳态电机转速 Omega 由二次平衡的非负根决定。螺旋桨推力与反扭矩采用
+## Exact observation and critic features
+
+For every other living entity \(j\), agent \(i\) receives the eleven-value row
 
 \[
-T_p=\rho\!\left(C_{T0}\frac{D_p^4\Omega^2}{4\pi^2}
-+C_{T1}\frac{D_p^3V_a\Omega}{2\pi}+C_{T2}D_p^2V_a^2\right),
-\]
-\[
-Q_p=\rho\!\left(C_{Q0}\frac{D_p^5\Omega^2}{4\pi^2}
-+C_{Q1}\frac{D_p^4V_a\Omega}{2\pi}+C_{Q2}D_p^3V_a^2\right).
+e_{ij}=\left[(p_j-p_i)/L,(v_j-v_i)/(2V_{\max}),h_j,1,
+\mathbf1_{c_j=R},\mathbf1_{c_j=B},\mathbf1_{j\in\mathcal P}\right],
+\quad L=\sqrt{\sum_a(b_a^+-b_a^-)^2}.
 \]
 
-配平同时要求三轴 `v_dot=0` 与 `omega_dot=0`；这包含螺旋桨反扭矩，不能用单独的“升力等于重力”代替完整配平。实现中的全部实际气动系数可在 `FixedWingDynamics.coefficients` 查看；没有额外依赖或预计算黑箱轨迹。
+The velocity denominator is twice `effective_config.preset.max_speed`: **240, 60 and 40 m/s** for particle, fixed wing and quadrotor respectively. It is not twice `reference_speed`. It normalizes observations; it does not clamp rigid-body velocity.
 
-## 四旋翼：理想模型与几何反馈
+Rows follow fixed Red Scout/Disturb/Attack, Blue Scout/Disturb/Attack, target order, excluding self. Dead entity rows are zero. The side flags do not encode role. All living entities appear regardless of Scout sectors; every role uses the same packing. There is no sensor noise, so \(Z_i(o\mid s)=\delta_{\mathrm{encode}_i(s)}(o)\).
 
-刚体结构、物理量和姿态增益参照 Lee、Leok、McClamroch 的 [arXiv:1003.2005v2，II/VII 节](https://arxiv.org/pdf/1003.2005v2)，其轴约定一致旋转至 FLU/ENU。m=4.34 kg、J=diag(.0820,.0845,.1377) kg·m²、l=.315 m、扭矩/推力系数 c=.008004 m；kR=8.81、kOmega=2.54 来自论文数值例。
+| Interface | Actor input |
+| --- | --- |
+| Particle acceleration | \((M-1)\times11\) entity table |
+| Particle position | Entity table plus raw six-value `[p,v]` self state |
+| Any rigid-body control | Entity table plus raw thirteen-value `[p,v,q,omega]` self state |
 
-前/右/后/左旋翼 `u_i∈[0,1]` 转成 `f_i=u_i*f_max`，机体推力沿 +z：
+Own health is absent from the self block. Other UAV attitudes/rates, policy memory and time are absent from actor rows. An already-dead Damage observer receives zeros for its entire observation, including the self block. Survival retires dead actors after their final transition.
 
-\[
-\begin{bmatrix}f\\M_x\\M_y\\M_z\end{bmatrix}=
-\begin{bmatrix}1&1&1&1\\0&-l&0&l\\-l&0&l&0\\c&-c&c&-c\end{bmatrix}
-\begin{bmatrix}f_1\\f_2\\f_3\\f_4\end{bmatrix}.
-\]
-
-推重比 2.5 为**工程假设**，`f_max=2.5mg/4`，理想水平悬停各 u=.4。分配器保留可行总推力，统一缩放差分力矩以满足旋翼上下界，不独立截断后假定总推力不变。
-
-acceleration 的速度参考上限为 20 m/s；position 外环另用 `v_des=clip_norm(.5*(p_des-p),12)`，保持到点导航的速度尺度。速度外环 `a_des=clip_norm(2*(v_des-v),6)`。目标推力方向为 `m*(a_des+g e3)`，参考朝向固定东；`eR=.5*(Rd^T R-R^T Rd)^vee`，力矩 `-8.81eR-2.54omega+omega×Jomega`。20/12 m/s、6 m/s² 和外环 .5/2 是本项目参考值，不是论文完整位置增益。
-
-代码保留姿态 PD 与陀螺补偿，未实现论文完整轨迹导数/期望角速度前馈，不能直接继承其完整稳定性结论。忽略气动阻力、旋翼陀螺和电机滞后。[Faessler 等 RAL 2018 原论文](https://rpg.ifi.uzh.ch/docs/RAL18_Faessler.pdf) 讨论 rotor drag；这里是去掉该项的理想刚体基线，不是高速 drag-aware 已辨识模型。
-
-## 三种动作语义
-
-acceleration 为世界系高层意图，经模型尺度转换一次建立 `v_des=v_start+a_intent*dt`，外部步内目标速度保持、内环随 stage 状态反馈。position 为米制绝对世界点，不统一承诺“到点即停”。actuator 直接进入气动力或推力/力矩模型。三种 A 不同，策略输出/checkpoint 不可混用。
-
-分组给导航职责，规则给 acceleration 意图，内环转成有限执行器，动力学从真实状态推进。当前分组只接受 acceleration，避免把 Grouping 的职责语义当成舵面/旋翼动作。
-
-## 碰撞、自动攻击和同时结算
-
-整批动作校验后，UAV 预测全部存活无人机同步 RK4 轨迹，particle 用本步线段，以同一时间参数求扫掠最近距离。不同时间路过同一点不构成碰撞。两机中心距离阈值为 `20*scene_scale`，目标不参加无人机碰撞，同阵营也会撞毁。按固定遍历处理，已在该遍历中死亡者不继续链式撞毁他者。
-
-碰撞后存活实体在**步开始位置**判定开火，再用共同 WorldKinematics 快照结算。红 Attack 因蓝 Attack 距离严格小于 fire_range 触发，蓝 Attack 因目标触发；无独立射击动作。友军不触发开火，也不受友军爆炸伤害，开火攻击者本步自毁。
-
-满伤/归零半径二维 `(200,400)*scale`，三维 `(300,600)*scale`；内半径满伤，中间线性衰减，外半径及外为零，默认 AttackIntensity=1。开火/命中都用共同步开始位置，不混用更新前攻击者与更新后受害者位置。survival 目标扣血；damage 目标 HP 免疫但累计原始 d。干扰规则作用于无人机，目标不承受该干扰扣血。
-
-事件 damage_scope=source_unclipped 是来源未截断贡献，多条同一步来源为同时事件，不能视作依次扣血。关闭详细事件不关闭 D。回放只插值视觉位置，不改物理时钟、HP、攻击、动作、指派和得分。
-
-## 宏步 SMDP、折扣和全灭折叠
-
-分组上层从一个决策边界执行到下一周期/伤亡/终局，持续 Delta 个物理步，是半马尔可夫过程 SMDP。按物理步折扣 gamma 的严格目标为
+`env.state()` is a privileged feature vector \(g(s)\), not a complete Markov state. Its base packing is eleven values per entity:
 
 \[
-\bar R_t=\sum_{j=0}^{\Delta-1}\gamma^jR_{t+j},\qquad
-y_t=\bar R_t+\gamma^\Delta b_tV(s_{t+\Delta}).
+[(p-b^-)/(b^+-b^-),v/(2V_{\max}),h,\ell,R,B,P].
 \]
 
-KnownOpponentEnv damage 当前返回未折扣 sum R 并提供 Delta，直接使用对应 gamma=1。gamma<1 时仅将 bootstrap 改为 gamma^Delta，而不折扣宏步内部奖励，不等价于物理步折扣任务；应由物理记录重建折扣宏奖或明确选择其他宏步目标。
+Dead blocks are zero. Particle state has length \(11M\), omitting the clock and cumulative damage. Rigid models append all UAV raw thirteen-value states (dead zero), then `[cycle,total_target_damage,is_damage]`, giving \(11M+13N+3\). Opponent memory and grouping commitments still require explicit augmentation. A recurrent critic or augmented state can be appropriate when the packed feature is insufficient.
 
-Open-SCORE 默认红全灭折叠是另一约定：继续真实蓝方调度至自然结束或 H，将 `R_t+gamma R_{t+1}+...` 合入当前红转移，并终止红决策过程。即使底层到 H 尚未自然结束，封装 terminal/bootstrap=0；诊断保留真实物理步和 terminated_naturally。关闭 fold_wipeout_tail 则保留普通自然/采样截断语义。原生/分组不会把红全灭凭空判作底层胜利。
+## Geometry and reset distribution
 
-兼容势 Phi 为所有存活蓝方到公开最近目标的闭合比例 `clip(1-distance/4000,0,1)` 的负和乘 shaping_coef。每步加 `gamma*Phi(next)-Phi(now)`；自然终局 Phi=0，截断保留实际 successor 势；折叠终止退款去掉已记入却被丢弃的未来势。诊断 -D 不变。friendly 惩罚为非势代价，不能宣称保持原任务最优策略。
+Scene scales are \(\lambda=1,.4,.16\) for particle, fixed wing and quadrotor. Default bounds are \(\lambda([-2500,2500]^2\times[0,2500])\) metres. Assets are independent uniform samples from \(\lambda([-2300,-1900]\times[-1200,1200]\times[500,1500])\), or a supplied fixed layout. Red samples a target uniformly and an area-uniform XY annulus with radii \([800,2200]\lambda\); 3D XY coordinates are clipped to bounds. Blue samples x from \([0,2500]\lambda\) and y across the scene. UAV altitude is uniform on \([200,1500]\lambda\), clipped to the height bounds.
 
-## Mask 与 bootstrap
+Particle velocity has a Gaussian unit direction and speed \(\|(u_1,u_2,u_3)\|/\sqrt3\), with independent \(u_a\sim U(35,120)\). Fixed-wing random resets use solved 30 m/s level flight, east for Red and west for Blue. Quadrotors reset at rest with identity quaternion and zero body rate. UAV and planar resets reject openings within \(\max(30\lambda,20\lambda+10^{-6})\) of already placed entities, including targets; ordinary 3D particles do not apply this rejection. Subsequent collisions remain possible. Uniform initialization is a separate display/experiment layout.
 
-原生 entity_mask 为 1=有效/存活；兼容 obs_mask/entity_mask 为 ALMA 屏蔽约定，1=缺席；兼容 agent_mask 又为 1=活，initial_agent_mask 为 1=初始 padding。不可跨接口复用同一“1 表示什么”的假设。
+Native seedless resets advance the instance RNG. The grouping environment instead retains its saved seed and reproduces that seeded initialization when reset without a new seed.
 
-团队物理自然结束 bootstrap=0；Parallel/Flight 采样到时和未折叠 compat 到时 bootstrap=1，自然结束优先于同一步到时。survival 个体死亡不同于团队结束；damage 死亡槽继续领全队 R。actor 用致死前存活 mask，团队 critic 用全局 bootstrap。存活/padding/归属/任务终止/episode 终止描述不同事实。
+Planar particles retain three coordinate slots, with fixed \(p_z=100\lambda\) by default and \(v_z=\alpha_z=0\). They use planar heading/speed rules, nine acceleration primitives, and two-dimensional spawn rejection. Rigid models require 3D. Scene scaling changes task geometry and interaction distances, never aircraft mass, inertia, wing size or rotor size.
 
-Open-SCORE literal revision 见 [API.md](API.md)，当前执行范围/结果见 [VALIDATION.md](VALIDATION.md)。
+## Particle transition and controls
+
+For \(\Delta=1\) s, a living particle first moves using old velocity:
+
+\[
+p^*=p+\Delta v,\qquad p'=\Pi_{\mathcal W}(p^*),\qquad
+w=v+\Delta\alpha,\qquad \widetilde v=\mathcal S_{35,120}(w;v).
+\]
+
+For \(\|w\|\ge10^{-3}\), \(\mathcal S_{m,V}(w;v)=w\,\mathrm{clip}(\|w\|,m,V)/\|w\|\). Otherwise use \(mv/\|v\|\) if \(\|v\|\ge10^{-3}\), or \(me_1\). This cancellation fallback preserves the previous heading. Remove outward velocity on each axis clipped during the position update, then apply the turn restriction. The default turn cap is \(\pi\) per step; a lower cap rotates the old heading toward the new one while preserving candidate speed, using a deterministic orthogonal axis in the antiparallel case. Boundary projection can reduce speed below the free-flight minimum.
+
+There is no \(\tfrac12\alpha\Delta^2\) position term. Continuous acceleration actions lie in \([-1,1]^3\) and set \(\alpha=40a\). Discrete actions are zero followed by normalized nonzero directions from \(\{-1,0,1\}^3\). Thus diagonal continuous inputs may have norm \(40\sqrt3\), whereas each nonzero discrete intent has norm 40.
+
+An absolute position command \(p_d\) uses
+
+\[
+v_d=\mathrm{sat}_{120}(.5(p_d-p)),\qquad
+\alpha=\mathrm{sat}_{40}(2(v_d-v)),
+\]
+
+where \(\mathrm{sat}_L(z)=z\min(1,L/\|z\|)\), extended by zero at \(z=0\). It does not teleport, and the particle's minimum-speed map does not promise stopping at the point.
+
+## Rigid-body transition
+
+World coordinates are east-north-up (ENU); body coordinates are forward-left-up (FLU). The scalar-first unit quaternion maps body to world. The thirteen stored values represent twelve physical degrees of freedom since \(q\in S^3\) and \(q\sim-q\). With body force excluding gravity,
+
+\[
+\dot p=v,\quad \dot v=R(q)F_B/m-ge_3,\quad
+\dot q=\tfrac12q\otimes(0,\omega),\quad
+\dot\omega=J^{-1}(M_B-\omega\times J\omega),\qquad g=9.81.
+\]
+
+RK4 uses \(n=\lceil\Delta/.01\rceil\) equal substeps, hence 100 substeps for a native step. For feedback law \(U\), stages are \(k_1=f(x,U(x))\), \(k_2=f(x+hk_1/2,U(x+hk_1/2))\), \(k_3=f(x+hk_2/2,U(x+hk_2/2))\), \(k_4=f(x+hk_3,U(x+hk_3))\). Update \(x^+=x+h(k_1+2k_2+2k_3+k_4)/6\), then normalize the quaternion. Derivatives also use normalized quaternions.
+
+Direct actuators are constant over the external step. An acceleration intent establishes \(v_d=v_{start}+\Delta\alpha\) once; velocity feedback uses this fixed reference at every RK4 stage. Position feedback recomputes references from the held absolute destination and the current stage state. It never recomputes acceleration intent as an increment from each stage velocity.
+
+Dynamics do not clamp physical attitude or speed to controller references. The world separately clips predicted substep positions for collision tests and clips final position, removing outward final velocity on clipped axes. Integrator states inside the substeps are not projected back onto the scene. There is no ground-impact crash rule, wind, sensor noise or actuator lag.
+
+### Fixed wing
+
+Physical parameters come from the [BYU MAGICC Aerosonde parameter set](https://github.com/byu-magicc/mavsim_public/blob/main/mavsim_python/parameters/aerosonde_parameters.py); the project independently implements the force and controller equations. The FRD-to-FLU rotation is \(C_f=\mathrm{diag}(1,-1,-1)\), with \(J_{FLU}=C_fJ_{FRD}C_f^T\).
+
+| Parameter | Value |
+| --- | --- |
+| Mass | 11 kg |
+| FRD inertia | `[[.8244,0,-.1204],[0,1.135,0],[-.1204,0,1.759]]` kg m² |
+| Wing area, span, chord | .55 m², 2.8956 m, .18994 m |
+| Density, Oswald efficiency | 1.2682 kg/m³, .9 |
+| Propeller diameter | .508 m |
+| Motor resistance, idle current, maximum voltage | .042 ohm, 1.5 A, 44.4 V |
+| Motor constant | `60/(145*2*pi)` |
+| Propeller thrust coefficients | .09357, -.06044, -.1079 |
+| Propeller torque coefficients | .005230, .004970, -.01664 |
+
+FRD body airflow is \((u,v_b,w)=C_fR^Tv\), with \(V=\|(u,v_b,w)\|\), \(\alpha=\mathrm{atan2}(w,u)\), \(\beta=\arcsin(v_b/\max(V,10^{-6}))\). Dynamic pressure is \(\rho V^2/2\). Lift blends linear \(.23+5.61\alpha\) with flat-plate \(2\operatorname{sign}(\alpha)\sin^2\alpha\cos\alpha\), using the smooth stall factors with \(M=50\) and \(\alpha_0=.47\). Drag uses \(.043+(.23+5.61\alpha)^2/(\pi(.9)b^2/S)+.0135\delta_e\). The PDF gives every rate, lateral and control coefficient, force decomposition, and steady motor/propeller polynomial.
+
+Direct actions are `[elevator,aileron,rudder,throttle]` in \([-1,1]^4\), with surfaces \(25^\circ a_{1:3}\), throttle \((a_4+1)/2\). Zero input is half throttle with neutral surfaces, not trim. Trim solves all three translational and three rotational equilibrium equations, including propeller reaction torque; the six unknowns are pitch, heading, three surfaces and throttle. Reset uses the 30 m/s solution rotated to the requested heading.
+
+Acceleration intent is \(5a\) m/s². Position guidance commands course toward the target and flight path \(\mathrm{atan2}(d_z,\max(\|d_{xy}\|,30))\) at 30 m/s. Reference speed is limited to 18-30 m/s, bank/pitch/path to 45/20/15 degrees. The controller schedules the complete feasible trim with requested speed, then applies course-to-bank, pitch, sideslip/rate and speed feedback. The PDF states the exact gains and signs. These gains and bounds are project choices, not the full BYU autopilot. The aircraft flies toward and through a point and cannot hover there.
+
+### Quadrotor
+
+The rigid-body parameters and attitude gains follow [Lee, Leok and McClamroch, arXiv:1003.2005v2, Sections II and VII](https://arxiv.org/pdf/1003.2005v2), with axis conventions rotated to ENU/FLU. Mass is 4.34 kg, \(J=\mathrm{diag}(.0820,.0845,.1377)\) kg m², arm length \(l=.315\) m and yaw ratio \(c_\tau=.008004\) m. The thrust-to-weight ratio 2.5 is a project assumption.
+
+In front/right/rear/left order, \(u_j\in[0,1]\), \(f_j=f_{max}u_j\), \(f_{max}=2.5mg/4\), and
+
+\[
+\begin{bmatrix}f\\M_x\\M_y\\M_z\end{bmatrix}
+=A\begin{bmatrix}f_1\\f_2\\f_3\\f_4\end{bmatrix},\qquad
+A=\begin{bmatrix}1&1&1&1\\0&-l&0&l\\-l&0&l&0\\c_\tau&-c_\tau&c_\tau&-c_\tau\end{bmatrix}.
+\]
+
+Body force is \((0,0,f)\). Direct zero action means zero thrust; level hover requires each \(u_j=.4\). Acceleration intent uses scale 6 m/s² and held velocity reference, capped to 20 m/s. Position guidance sets \(v_d=\mathrm{sat}_{12}(.5(p_d-p))\). At each stage,
+
+\[
+a_d=\mathrm{sat}_6(2(v_d-v)),\quad F_d=m(a_d+ge_3),\quad
+b_{3d}=F_d/\|F_d\|,\quad b_{2d}=(b_{3d}\times e_1)/\|b_{3d}\times e_1\|,
+\]
+\[
+R_d=[b_{2d}\times b_{3d},b_{2d},b_{3d}],\quad
+e_R=\tfrac12(R_d^TR-R^TR_d)^\vee,\quad
+M_d=-8.81e_R-2.54\omega+\omega\times J\omega,\quad f_d=F_d^TRe_3.
+\]
+
+Fixed east heading avoids hidden yaw memory. Since the commanded acceleration norm is below gravity, the thrust/heading construction is nonsingular. This is attitude PD with gyro compensation; it omits trajectory derivatives and desired-rate feedforward from the full source controller.
+
+The allocator clips collective thrust, divides it equally into \(\bar f\), and finds moment differential \(d=A^{-1}(0,M_d)^T\). It chooses the largest \(\kappa\in[0,1]\) satisfying \(0\le\bar f+\kappa d_j\le f_{max}\) for all rotors. Thus it preserves feasible collective thrust while uniformly reducing moment demand. It does not assume that independent rotor clipping preserves the requested total. Rotor drag, gyroscopic rotor effects and motor lag are omitted; [Faessler et al., RAL 2018](https://rpg.ifi.uzh.ch/docs/RAL18_Faessler.pdf) provides the corresponding drag-inclusive context.
+
+## Collision, automatic interaction and event timing
+
+Predict living UAV motion before applying functional actions. Particle collision paths are the unprojected line \(p+\tau\Delta v\); rigid paths use synchronized, clipped RK4 endpoint segments. For a matched segment pair, write \(r=p_i-p_j\), \(d=(q_i-p_i)-(q_j-p_j)\). Closest simultaneous separation is \(\|r+\tau_*d\|\), where \(\tau_*=\mathrm{clip}(-r^Td/\|d\|^2,0,1)\), or zero when \(\|d\|^2\le10^{-12}\). The same time parameter is used for both vehicles. Distance at most \(d_c=20\lambda\) kills both, including friendly pairs; assets are excluded.
+
+The traversal is i-major with inner indices j<i. It checks the outer agent's health once on entry and skips dead inner agents. **An outer agent killed within its inner sweep can still collide with another inner agent during that sweep.** Collision victims do not execute their predicted motion.
+
+After collision, living Blue Attack fires automatically when any living asset is strictly closer than `fire_range`; Red Attack fires when a living Blue Attack is strictly closer. Native Red triggering is specific to Blue Attack, even though explosion damage can affect any enemy UAV role. There is no separately chosen native firing action. Default `fire_range` is the full-damage radius and may be configured within it.
+
+For 3D, \((r_0,r_1)=(300,600)\lambda\), and for planar particles \((200,400)\lambda\). Unit attack intensity gives
+
+\[
+\eta(d)=\begin{cases}1&d<r_0,\\(r_1-d)/(r_1-r_0)&r_0\le d<r_1,\\0&d\ge r_1.\end{cases}
+\]
+
+All firing decisions and damage use the common post-collision, pre-motion snapshot. Loss at asset k is \(L_k=\sum_{b\in\mathcal B_A:h_b>0}I_b\eta(\|p_b-p_k\|)\). UAV attack losses sum firing enemy Attack sources; friendly explosions are excluded. One source can damage multiple enemies and multiple source contributions add before HP clipping. A firing attacker self-destructs after this step's motion/combat. Other combat victims also complete their motion; their velocity is zeroed on the next inactive update.
+
+Disturb uses a forward sector of radius \(600\lambda\) and half-angle \(\pi/6\), with
+
+\[
+G_{ji}=\mathbf1_{10^{-3}<d_{ji}<600\lambda,\;\theta_{ji}<\pi/6}
+\exp[-(d_{ji}/\lambda)^2/2]/\sqrt{2\pi}.
+\]
+
+The angle is zero when either direction norm is below \(10^{-3}\). Let \(S_c(j)\) sum \(G_{ji}\) over living UAVs of side c. Red Disturb activates if \(S_R<S_B\); Blue if \(S_R\ge S_B\). Disturb damage is \(.1\sum_jJ_jG_{ji}\) and affects either team's UAVs, never assets. Scout has radius \(2000\lambda\), half-angle \(\pi/3\); its functional sector does not filter native actor observations.
+
+Detailed attack events label damage `source_unclipped` and `simultaneous=True`. These contributions are not sequential health decrements; simultaneous overkill remains in raw damage. Disabling event recording does not disable damage accounting. Replay position interpolation does not change the physical state, clock or score.
+
+## Survival and Damage tasks
+
+Survival updates \(h_k'=\max(0,h_k-L_k)\) and \(D_k'=D_k+L_k\). Its Red outcome is -1 if any asset HP is below \(10^{-3}\), otherwise +1 if every Blue Attack HP is below \(10^{-3}\), otherwise zero. Target loss has priority. Default team reward is \(R_R=10z\), \(R_B=-10z\). Red elimination alone does not naturally terminate the world. Individual nonpositive health retires a Survival actor after its final transition.
+
+Explicit `reward_weights` replaces the Survival scalar by a dot product with `[hit,target,enemy,episode]`. For a living Attack agent, hit is the sum of \(\max(0,1-d/r_1)\) over living enemy UAVs, target is negative nearest live-asset distance divided by L, and enemy is negative nearest Blue distance/L for Red or nearest Red distance/L minus 1 for Blue. Empty sets give zero, including Blue's enemy slot. These are post-step geometric proxies, not recorded explosion damage. Scout/Disturb use their role scalar in the first slot and zero in the next two; dead agents have zero first three slots. The episode slot already contains the signed team terminal reward. The PDF specifies the role scalar and boundary penalty in full. Damage rejects these weights.
+
+Damage keeps every asset at finite reset health \(h_k^0\), while accumulating raw \(D_k'=D_k+L_k\). Its per-step team reward and natural completion are
+
+\[
+d_t=\sum_kL_k,\qquad R_R=-d_t,\quad R_B=d_t,\qquad
+\mathrm{done}=\mathbf1_{\forall b\in\mathcal B_A:h_b'\le0}.
+\]
+
+There is no health budget, team-size normalization, asset-count normalization or Survival bonus. Every team member receives the full shared team reward, including dead Damage slots and damage occurring after Red extinction. Summing teammates' duplicate rewards would change the objective. At \(\gamma=1\), team returns are \((-\sum_kD_k,+\sum_kD_k)\); a caller may instead optimize a discounted task.
+
+Native horizon H is sampling truncation, not a victory. The team bootstrap mask is \(b_t=1-\mathbf1_{\text{natural completion}}\), including one at truncation and after individual death. Natural completion takes priority if it coincides with H. A CTDE target is \(y_t=R_t+\gamma b_tQ^-(g(s'),a_R')\), with target-policy successor actions. Actor losses use participation before the transition, so a lethal final action remains trainable. Entity masks use 1 for living/valid entries; participation, actor retirement and global completion express different facts.
+
+## General grouping/SMDP extension
+
+Grouping assigns defenders to protected targets and reserve; it is an acceleration-only execution extension. Built-in fixed opposing policies are `reactive`, `balanced` and `concentrated`, all with lower-level `rush` execution. Balanced divides Blue by target quotas; concentrated selects the minimum mean-travel target. Reactive samples a target with probabilities proportional to \(\exp(-2\,\mathrm{coverage}-0.25\,\mathrm{travel})\), where coverage sums living Red health times \(\exp(-d/(850\lambda))\) and travel is mean Blue distance divided by \(5000\lambda\). These complete rules are separate from externally supplied frozen learned policies.
+
+A macro transition lasts d physical steps until a command opportunity, casualty or completion. If Red has no living member, the current call continues Blue scheduling through natural completion or the horizon and sets `no_red_continuation=True`; it does not return intermediate command/casualty decisions for an empty Red team.
+
+For a physical-step discount \(\gamma\), the exact SMDP target is
+
+\[
+\bar R_t=\sum_{j=0}^{d-1}\gamma^jR_{t+j},\qquad
+y_t=\bar R_t+\gamma^db_tV(s_{t+d}).
+\]
+
+Current grouping Damage reward is the undiscounted sum, directly matching \(\gamma=1\). Changing only the bootstrap to \(\gamma^d\) does not discount internal rewards; a discounted physical objective must reconstruct those rewards or explicitly choose a different macro objective. Grouping Survival uses terminal success 0/1 and its configured horizon rule (`red_win`, `draw` or `blue_win`), unlike native ±10 with horizon truncation. Grouping Damage retains sampling truncation and its associated bootstrap. These extension conventions do not modify the sixteen native themes.
+
+## Implementation correspondence and editing
+
+The v4 public simulation is `env.simulation`, and `Simulation.entities` owns the stable entity sequence. The relevant flat package modules are:
+
+| Concern | Source |
+| --- | --- |
+| Configuration and model scales | [had_env/config.py](../had_env/config.py) |
+| Reset law | [had_env/initialization.py](../had_env/initialization.py) |
+| Synchronized collisions/combat | [had_env/world.py](../had_env/world.py) |
+| Entity movement and health | [had_env/agents/base.py](../had_env/agents/base.py) |
+| Attack, Scout and Disturb rules | [had_env/agents](../had_env/agents) |
+| Geometry and snapshot damage | [had_env/geometry.py](../had_env/geometry.py) |
+| Rigid RK4, fixed wing, quadrotor | [had_env/dynamics](../had_env/dynamics) |
+| Observation and critic packing | [had_env/observations.py](../had_env/observations.py), [had_env/environment.py](../had_env/environment.py) |
+| Task rewards and completion | [had_env/tasks.py](../had_env/tasks.py) |
+| Grouping and opponent laws | [had_env/grouping](../had_env/grouping) |
+
+The source is authoritative where a mathematical abbreviation omits an implementation detail. The reference article supplied for this documentation was used only for the scenario/dynamics/game structure; its alternative particle position and health equations were not copied. The PDF uses native v4 semantics and does not describe removed algorithm adapters.
+
+To rebuild, run `tectonic --keep-logs --outdir <external-build-directory> docs/PROBLEM_FORMULATION.tex`, inspect all rendered pages, then copy the resulting PDF into `docs/PROBLEM_FORMULATION.pdf`. Keep build auxiliaries and the local reference article outside the deliverable directory.
