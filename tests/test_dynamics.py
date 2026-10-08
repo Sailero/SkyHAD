@@ -1,14 +1,13 @@
 """Physical behavior checks for the independently implemented aircraft models."""
-import importlib.util
+import copy
+from make_env import make_env
 
 import numpy as np
 import pytest
 
 
 def models():
-    # Missing dynamics is the first observable failure, before source is written.
-    assert importlib.util.find_spec("had_env.core.dynamics") is not None
-    from had_env.core.dynamics import FixedWingDynamics, QuadrotorDynamics
+    from had_env.dynamics import FixedWingDynamics, QuadrotorDynamics
     return FixedWingDynamics, QuadrotorDynamics
 
 
@@ -121,7 +120,7 @@ def test_quadrotor_zero_acceleration_preserves_feasible_sixteen_mps_velocity():
 
 def test_quadrotor_flu_tilt_and_rotor_moments_have_physical_signs():
     _, Quad = models()
-    from had_env.core.dynamics.control import quaternion_from_euler
+    from had_env.dynamics.control import quaternion_from_euler
     model = Quad()
     state = model.initial_state([0., 0., 100.], [0., 0., 0.])
     # Nose-down tilt points the up-axis thrust toward world east.
@@ -192,3 +191,24 @@ def test_all_extreme_physical_actuators_remain_finite_without_velocity_clamps(ki
     if kind == "quadrotor":
         full, _ = model.integrate(state, np.ones(4), dt=2.)
         assert full[5] > model.max_speed
+
+
+@pytest.mark.parametrize("model", ["particle", "UAV_fixedwing", "UAV_quadrotor"])
+def test_position_command_moves_without_teleport_and_invalid_batch_is_atomic(model):
+    env = make_env(env_agent_type=model, env_agent_action_type="position", red_count=1,
+                   blue_count=1, max_cycles=2)
+    obs, _ = env.reset(seed=42)
+    assert env.observation_space("red_0").contains(obs["red_0"])
+    before = copy.deepcopy(env.simulation.agents[0].position)
+    target = np.asarray(before) + [20., 0., 0.]
+    target = np.clip(target, env.simulation.world_bounds[:, 0], env.simulation.world_bounds[:, 1])
+    bad = {a: target for a in env.agents}
+    bad["blue_0"] = [float("nan"), 0, 0]
+    with pytest.raises(ValueError):
+        env.step(bad)
+    assert env.simulation.agents[0].position == before
+    assert env.simulation.physics_step_count == 0
+    env.step({a: target for a in env.agents})
+    assert np.linalg.norm(np.asarray(env.simulation.agents[0].position) - before) > 0
+    assert not np.array_equal(env.simulation.agents[0].position, target)
+    env.close()

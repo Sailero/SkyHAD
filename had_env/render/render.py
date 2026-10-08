@@ -1,10 +1,20 @@
+import numpy as np
 import pygame
-from pygame.locals import *
-from had_env.core.config import *
+from pygame.locals import KEYDOWN, K_ESCAPE, QUIT
+from had_env.config import (
+    BlueColor,
+    BorderColor,
+    DeadAgentColor,
+    RedColor,
+    ScreenHeight,
+    ScreenLength,
+    ScreenWidth,
+)
 from pathlib import Path
 
 import math
 from .glyphs import airplane_points, heading_angle, rotor_centers
+from had_env.geometry import get_area_point
 
 
 def draw_isosceles_triangle(screen, size, center, angle=0., color=(255, 0, 0), top_angle=45):
@@ -20,17 +30,14 @@ def draw_isosceles_triangle(screen, size, center, angle=0., color=(255, 0, 0), t
     """
     size = size * 2
 
-    # 设置底角为 60 度，即顶角为 60°
-    half_base = size * math.tan(math.radians(top_angle / 2))  # 顶角60°
+    half_base = size * math.tan(math.radians(top_angle / 2))
 
-    # 初始方向为“朝右”时的顶点坐标（以 center 为原点）
-    vertex_top = (size / 2, 0)  # 顶点（在右侧）
+    vertex_top = (size / 2, 0)
     vertex_left = (-size / 2, -half_base)
     vertex_right = (-size / 2, half_base)
 
     vertices = [vertex_top, vertex_left, vertex_right]
 
-    # 旋转并平移三角形顶点
     rotated_vertices = []
     cos_a = math.cos(angle)
     sin_a = math.sin(angle)
@@ -80,22 +87,16 @@ class DisplayPlayer:
 
         targets_info_n, red_agents_info_n, blue_agents_info_n = agent_info_list
 
-        # 使用带透明度的图层绘制各类信息
         transparent_layer = self.transparent_layer
         transparent_layer.fill((0, 0, 0, 0))
 
-        # 关键中枢点绘制
         self.draw_targets(transparent_layer, targets_info_n)
 
-        # 智能体层
         self.draw_agents(transparent_layer, red_agents_info_n, color="Red")
         self.draw_agents(transparent_layer, blue_agents_info_n, color="Blue")
 
-
-        # 合成透明层到底层
         self.screen.blit(transparent_layer, (0, 0))
 
-        # 绘制边框
         self.draw_borders()
 
         self.display_result(game_result)

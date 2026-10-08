@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from had_env.core.make_env import HADEnv
+from had_env.simulation import Simulation
 
 
 @dataclass(frozen=True)
@@ -63,8 +63,8 @@ class Scenario:
             if bounds.shape != (3, 2) or not np.isfinite(bounds).all():
                 raise ValueError("target_region must be finite [x/y/z][low/high] bounds")
 
-    def make_world(self, seed=None):
-        return HADEnv(
+    def make_simulation(self, seed=None):
+        return Simulation(
             self.red_count - self.red_scouts - self.red_disturbers,
             self.blue_count - self.blue_scouts - self.blue_disturbers,
             self.target_count,
@@ -77,17 +77,3 @@ class Scenario:
             target_initialization=self.target_initialization, target_positions=self.target_positions,
             effective_config=self.effective_config,
         )
-
-    def reset_world(self, world, *, seed=None, options=None):
-        return world.reset(seed=seed, evaluate=bool((options or {}).get("evaluate", self.evaluate)))
-
-    def observation(self, world):
-        """Return unchanged normalized relative rows, including dead entities."""
-        return world.get_observation(is_relative_observation=True)
-
-    def reward(self, world):
-        """Return the original team RealReward and per-agent LatentReward."""
-        return world.get_reward()
-
-    def done(self, world):
-        return int(world.is_terminal())

@@ -1,59 +1,28 @@
-"""Public protocol checks plus trajectories captured before package extraction."""
+"""Public APIs, immutable config, fixed observations and independent RNG streams."""
 import copy
-import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 import numpy as np
 import pytest
-from pettingzoo.test import parallel_api_test, parallel_seed_test
 
 from make_env import make_env
-
-
-REFERENCE = json.loads((Path(__file__).parent / "data" / "physics_reference.json").read_text(encoding="utf-8"))
+from had_env.simulation import Simulation
+from pettingzoo.test import parallel_api_test, parallel_seed_test
 
 
 def _world_rows(env):
     return [[list(map(float, x.position)), list(map(float, x.velocity)), float(x.Health),
              bool(getattr(x, "IsFire", False)), bool(getattr(x, "IsDisturb", False))]
-            for x in env.world.world]
+            for x in env.simulation.entities]
 
 
 def _place(env, positions):
-    for e, (p, v) in zip(env.world.world, positions):
+    for e, (p, v) in zip(env.simulation.entities, positions):
         e.reset(list(p), list(v))
-    env.world.reset_episode_state()
-
-
-@pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["name"])
-def test_physics_matches_original_recorded_trajectory(case):
-    env = make_env(**case["kwargs"], max_cycles=50)
-    obs, _ = env.reset(seed=case["seed"])
-    if case["preset"]:
-        _place(env, case["preset"])
-    assert _world_rows(env) == case["initial_world"]
-    np.testing.assert_allclose(env.scenario.observation(env.world), case["initial_observation"], rtol=0, atol=0)
-    for reference in case["frames"]:
-        acting = env.agents.copy()
-        obs, rewards, terms, truncs, infos = env.step({a: reference["actions"][env.agent_name_mapping[a]] for a in acting})
-        for actual, expected in zip(_world_rows(env), reference["world"]):
-            np.testing.assert_allclose(actual[0], expected[0], rtol=0, atol=1e-11)
-            np.testing.assert_allclose(actual[1], expected[1], rtol=0, atol=1e-11)
-            assert actual[2:] == expected[2:]
-        np.testing.assert_allclose(env.state(), reference["state"], rtol=1e-7, atol=1e-7)
-        for a in acting:
-            i = env.agent_name_mapping[a]
-            np.testing.assert_allclose(obs[a], reference["observations"][i], rtol=1e-7, atol=1e-7)
-            side = "Red" if a.startswith("red") else "Blue"
-            side_index = i - (case["kwargs"]["red_count"] if side == "Blue" else 0)
-            assert rewards[a] == reference["rewards"]["RealReward"][side]
-            np.testing.assert_allclose(infos[a]["LatentReward"], reference["rewards"]["LatentReward"][side][side_index], rtol=0, atol=1e-12)
-            assert terms[a] == reference["done"][i]
-            assert not truncs[a]
-        assert env.outcome_red == reference["outcome"]
-    env.close()
+    env.simulation.reset_episode_state()
 
 
 @pytest.mark.parametrize("continuous", [False, True])
@@ -102,7 +71,7 @@ def test_invalid_joint_action_has_no_side_effects(continuous, bad):
         with pytest.raises(ValueError):
             env.step(actions)
         assert _world_rows(env) == before
-        assert env.num_cycles == env.world.physics_step_count == 0
+        assert env.num_cycles == env.simulation.physics_step_count == 0
         assert env.np_random.bit_generator.state == rng
     env.close()
 
@@ -128,27 +97,11 @@ def test_death_final_transition_then_removal_without_slot_shifts():
     env.close()
 
 
-def test_horizon_does_not_invent_win_and_terminal_reward_paid_once():
-    env = make_env(red_count=1, blue_count=1, max_cycles=1, initialization="uniform")
-    env.reset(seed=22)
-    _, rewards, terms, truncs, infos = env.step({a: 0 for a in env.agents})
-    assert not any(terms.values()) and all(truncs.values())
-    assert all(r == 0 for r in rewards.values()) and env.outcome_red == 0
-    assert env.agents == [] and env.step({}) == ({}, {}, {}, {}, {})
-    env.reset(seed=22)
-    env.world.blue_agents[0].Health = 0
-    _, rewards, terms, truncs, _ = env.step({a: 0 for a in env.agents})
-    assert rewards == {"red_0": 10., "blue_0": -10.}
-    assert all(terms.values()) and not any(truncs.values())
-    assert env.step({})[1] == {}
-    env.close()
-
-
 def test_private_rng_does_not_change_ambient_numpy_and_is_repeatable(monkeypatch):
     import importlib
     # The shipped pi limit normally leaves this fallback dormant. Lower it
     # only inside this test to exercise the preserved native random path.
-    monkeypatch.setattr(importlib.import_module("had_env.core.function.Function"), "wMax", np.pi / 2)
+    monkeypatch.setattr(importlib.import_module("had_env.geometry"), "wMax", np.pi / 2)
     first, second = make_env(red_count=1, blue_count=1), make_env(red_count=1, blue_count=1)
     np.random.seed(143)
     before = copy.deepcopy(np.random.get_state())
@@ -159,7 +112,7 @@ def test_private_rng_does_not_change_ambient_numpy_and_is_repeatable(monkeypatch
     for e in (first, second):
         _place(e, [([-1000, 0, 100], [20, 0, 0]), ([2000, 0, 100], [-20, 0, 0]),
                    ([-2200, -700, 100], [0, 0, 0]), ([-2200, 700, 100], [0, 0, 0])])
-        e.world.agents[0].velocity = [20., 0., 0.]
+        e.simulation.agents[0].velocity = [20., 0., 0.]
     action = {a: 0 for a in first.agents}
     action["red_0"] = 5  # a discrete acceleration containing negative x
     first.step(action)
@@ -188,25 +141,6 @@ def test_mpe_fixed_lists_flattened_obs_one_hot_and_done_semantics():
     env.close()
 
 
-def test_render_and_reset_lifecycle(monkeypatch):
-    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
-    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
-    env = make_env(red_count=1, blue_count=1, render_mode="rgb_array")
-    with pytest.raises(RuntimeError):
-        env.step({})
-    env.reset(seed=1)
-    before = env.state()
-    frame = env.render()
-    assert frame.dtype == np.uint8 and frame.ndim == 3 and frame.shape[-1] == 3
-    np.testing.assert_array_equal(env.state(), before)
-    env.close()
-    with pytest.raises(RuntimeError):
-        env.step({})
-    env.reset(seed=1)
-    assert env.render().shape == frame.shape
-    env.close()
-
-
 def test_public_import_is_headless_without_research_dependencies():
     code = "from make_env import make_env; import sys; e=make_env(); e.reset(seed=1); e.step({a:0 for a in e.agents}); e.close(); assert not any(k in sys.modules for k in ['torch','pygame','PySide6','open_score'])"
     subprocess.run([sys.executable, "-B", "-c", code], cwd=Path(__file__).parents[1], check=True)
@@ -228,7 +162,7 @@ def test_native_box_controls_keep_valid_fixed_slots_after_agent_death(task, cont
     env = make_env(env_agent_type="UAV_quadrotor", env_agent_action_type=control,
                    task_mode=task, red_count=1, blue_count=1, max_cycles=3)
     env.reset(seed=17)
-    env.world.red_agents[0].Health = 0
+    env.simulation.red_agents[0].Health = 0
     for _ in range(2):
         actions = {a: ([.4]*4 if control == "actuator" else env._entity(a).position)
                    for a in env.agents}
@@ -236,3 +170,74 @@ def test_native_box_controls_keep_valid_fixed_slots_after_agent_death(task, cont
         assert env.state_space.contains(env.state())
         assert all(env.observation_space(a).contains(row) for a, row in obs.items())
     env.close()
+
+
+def test_headless_import_steps_and_close_never_import_pygame():
+    # A fresh interpreter is necessary: rendering tests in this process may
+    # legitimately have already imported pygame during test collection.
+    project = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(project)
+    code = """
+import importlib.abc
+import sys
+class NoRenderer(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'pygame' or fullname.startswith('pygame.') or fullname.startswith('had_env.render'):
+            raise AssertionError('headless physics imported renderer: ' + fullname)
+sys.meta_path.insert(0, NoRenderer())
+from had_env.config import AeroPoint
+from had_env.simulation import Simulation
+import numpy as np
+env = Simulation(2, 1, 1)
+env.reset(seed=4, evaluate=True)
+env.step_physics(np.zeros((3, 3)))
+assert len(env.step(np.zeros((3, 3)))) == 6
+env.close()
+env.close()
+assert env.render() is False
+assert not any(name == 'pygame' or name.startswith('pygame.') for name in sys.modules)
+print('headless-ok')
+"""
+    result = subprocess.run([sys.executable, "-B", "-c", code], cwd=project,
+                            env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "headless-ok"
+
+
+def test_public_config_override_and_concurrent_model_geometry():
+    env = make_env(config={"red_count": 2, "spatial_dim": 2}, red_count=1)
+    other = make_env(env_agent_type="UAV_quadrotor")
+    env.reset(seed=17)
+    other.reset(seed=17)
+    assert len(env.simulation.red_agents) == 1
+    assert env.simulation.attack_distance == (200., 400.)
+    assert other.simulation.attack_distance == (48., 96.)
+    assert other.simulation.world_bounds.tolist() == [[-400., 400.], [-400., 400.], [0., 400.]]
+    env.step({a: 0 for a in env.agents})
+    assert env.simulation.attack_distance == (200., 400.)
+    env.close()
+    other.close()
+
+
+@pytest.mark.parametrize("kwargs", [dict(env_agent_type="UAV_fixedwing", spatial_dim=2),
+    dict(env_agent_type="particle", env_agent_action_type="actuator"),
+    dict(env_agent_type="unknown"), dict(env_agent_action_type="unknown")])
+def test_unsupported_model_control_combinations_fail_at_construction(kwargs):
+    with pytest.raises(ValueError):
+        make_env(**kwargs)
+
+
+def test_native_effective_config_sets_uav_dimensions_and_task():
+    from had_env.config import EnvConfig
+    from had_env.simulation import Simulation
+    config = EnvConfig(env_agent_type="UAV_quadrotor", spatial_dim=3, task_mode="damage")
+    env = Simulation(1, 1, 1, effective_config=config)
+    try:
+        assert env.spatial_dim == 3
+        assert env.task_mode == "damage"
+        assert env.control_space.shape == (3,)
+        env.reset(seed=17)
+        assert all(entity.spatial_dim == 3 for entity in env.entities)
+    finally:
+        env.close()

@@ -132,8 +132,7 @@ class HADStage3Adapter:
         if horizon_policy not in ("red_win", "draw", "blue_win"):
             raise ValueError("horizon_policy must be red_win, draw, or blue_win")
 
-        from had_env.core.config import AeroPoint, DefaultTargetRegion
-        from had_env.core.make_env import HADEnv
+        from had_env.simulation import Simulation
 
         from had_env.config import EnvConfig
         effective_config = effective_config or EnvConfig(spatial_dim=spatial_dim, task_mode=task_mode,
@@ -161,7 +160,7 @@ class HADStage3Adapter:
             ):
                 raise ValueError("target_positions must stay inside the HAD world")
 
-        self.env = HADEnv(
+        self.env = Simulation(
             red_attackers,
             blue_attackers,
             targets,
@@ -324,8 +323,6 @@ class HADStage3Adapter:
         return self.global_state()
 
     def _set_target_positions(self, positions: np.ndarray) -> None:
-        from had_env.core.config import AeroPoint
-
         array = np.asarray(positions, dtype=np.float64).copy()
         if array.shape != (len(self.env.targets), 3) or not np.all(np.isfinite(array)):
             raise ValueError("target_positions must have shape [targets, 3]")
@@ -912,7 +909,7 @@ class HADStage3Adapter:
 
     def snapshot(self) -> HADStage3Snapshot:
         """Capture an exact physical and command-level branch point."""
-        from had_env.core.version import PHYSICS_PROTOCOL
+        from had_env.config import PHYSICS_PROTOCOL
         return HADStage3Snapshot(
             task_mode=self.task_mode,
             env_agent_type=self.env_agent_type,
@@ -928,7 +925,7 @@ class HADStage3Adapter:
             last_physics_events=tuple(copy.deepcopy(self.env.last_physics_events)),
             step_count=int(self.step_count),
             entity_states=tuple(
-                copy.deepcopy({k:v for k,v in entity.__dict__.items() if k not in ('dynamics','_next_rigid_state','_next_clamped_axes')}) for entity in self.env.world
+                copy.deepcopy({k:v for k,v in entity.__dict__.items() if k not in ('dynamics','_next_rigid_state','_next_clamped_axes')}) for entity in self.env.entities
             ),
             red_assignment=tuple(sorted(self._red_assignment.items())),
             blue_assignment=tuple(sorted(self._blue_assignment.items())),
@@ -948,7 +945,7 @@ class HADStage3Adapter:
         continuation_seed: Optional[int] = None,
     ) -> Dict[str, object]:
         """Restore a branch, optionally replacing continuation RNG streams."""
-        from had_env.core.version import PHYSICS_PROTOCOL
+        from had_env.config import PHYSICS_PROTOCOL
         if (getattr(snapshot, "physics_protocol", None) != PHYSICS_PROTOCOL
                 or snapshot.env_agent_type != self.env_agent_type
                 or snapshot.env_agent_action_type != self.env_agent_action_type
@@ -960,7 +957,7 @@ class HADStage3Adapter:
                 or snapshot.max_steps != self.max_steps
                 or snapshot.horizon_policy != self.horizon_policy):
             raise ValueError("Snapshot physics or task configuration differs; reset the environment")
-        if len(snapshot.entity_states) != len(self.env.world):
+        if len(snapshot.entity_states) != len(self.env.entities):
             raise ValueError("HAD Stage-3 snapshot roster differs from adapter roster")
         expected_red = set(self.red_ids)
         expected_blue = set(self.blue_ids)
@@ -972,10 +969,10 @@ class HADStage3Adapter:
             raise ValueError("snapshot violates the fixed-target Stage-3 protocol")
         if not 0 <= snapshot.step_count <= self.max_steps:
             raise ValueError("snapshot step lies outside the episode horizon")
-        for entity, state in zip(self.env.world, snapshot.entity_states):
+        for entity, state in zip(self.env.entities, snapshot.entity_states):
             if state.get("Id") != entity.Id or state.get("Type") != entity.Type:
                 raise ValueError("snapshot entity identity differs from adapter roster")
-        for entity, state in zip(self.env.world, snapshot.entity_states):
+        for entity, state in zip(self.env.entities, snapshot.entity_states):
             dynamics = entity.dynamics
             entity.__dict__.clear()
             entity.__dict__.update(copy.deepcopy(dict(state)))

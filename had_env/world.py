@@ -1,13 +1,18 @@
-from had_env.core.config import *
-from had_env.core.function.Function import (
-    distance, distances_from, attack_intensity_ratio, disturb_intensity_ratio,
-    closest_segment_distance, WorldKinematics,
+"""Entity ownership and synchronized physical stepping/combat."""
+import numpy as np
+from had_env.config import AttackIntensity, DisturbIntensity, Interval, initial_health
+from had_env.geometry import (
+    distance,
+    attack_intensity_ratio,
+    disturb_intensity_ratio,
+    closest_segment_distance,
+    WorldKinematics,
 )
-from had_env.core.version import CORE_VERSION, PHYSICS_PROTOCOL
-from had_env.core.agents.base import Entity
-from had_env.core.agents.attack import AttackAgent
-from had_env.core.agents.disturb import DisturbAgent
-from had_env.core.agents.scout import ScoutAgent
+from had_env.config import CORE_VERSION, PHYSICS_PROTOCOL
+from had_env.agents.base import Entity
+from had_env.agents.attack import AttackAgent
+from had_env.agents.disturb import DisturbAgent
+from had_env.agents.scout import ScoutAgent
 
 
 class World:
@@ -15,7 +20,7 @@ class World:
                  blue_scout_n, blue_disturb_n, blue_attack_n,
                  target_n, task_mode='survival', target_health=None,
                  spatial_dim=2, plane_altitude=None, effective_config=None):
-        # 读取世界信息
+
         self.red_scout_n = red_scout_n
         self.red_disturb_n = red_disturb_n
         self.red_attack_n = red_attack_n
@@ -37,7 +42,7 @@ class World:
         self.collision_distance = self.effective_config.collision_distance
         self.dynamics = None
         if self.env_agent_type != 'particle':
-            from had_env.core.dynamics import FixedWingDynamics, QuadrotorDynamics
+            from had_env.dynamics import FixedWingDynamics, QuadrotorDynamics
             self.dynamics = (FixedWingDynamics if self.env_agent_type == 'UAV_fixedwing' else QuadrotorDynamics)()
         self.spatial_dim = int(spatial_dim)
         self.attack_distance = self.effective_config.attack_distance
@@ -53,9 +58,8 @@ class World:
         if not np.isfinite(self.target_health) or self.target_health <= 0:
             raise ValueError("target_health must be finite and positive")
 
-        # 创建智能体（这里的智能体是否跟决策的智能体保持一致，如何保持顺序一致的问题呢？还是说不需要保持顺序一致呢？）
-        self.world = self.create_world()
-        for entity in self.world:
+        self.entities = self.create_entities()
+        for entity in self.entities:
             entity.spatial_dim = self.spatial_dim
             entity.env_agent_type = self.env_agent_type
             entity.env_agent_action_type = self.env_agent_action_type
@@ -74,8 +78,8 @@ class World:
         self.red_agent_n = self.red_disturb_n + self.red_attack_n + self.red_scout_n
         self.blue_agent_n = self.blue_disturb_n + self.blue_attack_n + self.blue_scout_n
 
-        self.agents = [agent for agent in self.world if agent.Type != 'Entity']
-        self.targets = [entity for entity in self.world if entity.Type == 'Entity']
+        self.agents = [agent for agent in self.entities if agent.Type != 'Entity']
+        self.targets = [entity for entity in self.entities if entity.Type == 'Entity']
         self.red_agents = [agent for agent in self.agents if agent.Color == "Red"]
         self.blue_agents = [agent for agent in self.agents if agent.Color == "Blue"]
         self.update_alive_agents()
@@ -86,8 +90,8 @@ class World:
         self.last_physics_events = []
         color_map = {"Red": 0, "Blue": 1, "Entity": 2}
         type_map = {"Entity": 0, "Attack": 1, "Disturb": 2, "Scout": 3}
-        self._color_code = np.asarray([color_map[entity.Color] for entity in self.world], dtype=np.int8)
-        self._type_code = np.asarray([type_map[entity.Type] for entity in self.world], dtype=np.int8)
+        self._color_code = np.asarray([color_map[entity.Color] for entity in self.entities], dtype=np.int8)
+        self._type_code = np.asarray([type_map[entity.Type] for entity in self.entities], dtype=np.int8)
         self.entity_mask = None
         self.boundary_clips = 0
 
@@ -116,145 +120,27 @@ class World:
     def target_damage(self):
         return float(sum(target.cumulative_damage for target in self.targets))
 
-    def _episode_termination_reason(self):
-        if self.task_mode == 'survival':
-            if any(target.Health < 1e-3 for target in self.targets):
-                return 'target_destroyed'
-            blue_eliminated = all(agent.Health < 1e-3 for agent in self.blue_agents
-                                  if agent.Type == 'Attack')
-        else:
-            blue_eliminated = all(agent.Health <= 0 for agent in self.blue_agents
-                                  if agent.Type == 'Attack')
-        return 'blue_attackers_destroyed' if blue_eliminated else None
 
-    def is_episode_done(self):
-        """Natural completion only; the caller owns the time limit."""
-        return self._episode_termination_reason() is not None
+    def create_entities(self):
+        """Stable order: Red scout/disturb/attack, Blue roles, then targets."""
+        entities = []
+        entity_id = 0
+        for color, counts in (
+            ('Red', (self.red_scout_n, self.red_disturb_n, self.red_attack_n)),
+            ('Blue', (self.blue_scout_n, self.blue_disturb_n, self.blue_attack_n)),
+        ):
+            render_id = 0
+            for agent_class, count in zip((ScoutAgent, DisturbAgent, AttackAgent), counts):
+                for _ in range(count):
+                    entities.append(agent_class(color, entity_id, render_id))
+                    entity_id += 1
+                    render_id += 1
+        for render_id in range(self.target_n):
+            entities.append(Entity(entity_id, render_id, task_mode=self.task_mode,
+                                   target_health=self.target_health))
+            entity_id += 1
+        return entities
 
-    def task_info(self):
-        """Expose task state without accumulating rewards on repeated reads.
-
-        Per-target counters live in entity state so native deep copies and
-        grouping entity snapshots retain the complete damage branch point.
-        Survival returns remain governed by the existing reward contract.
-        """
-        by_target = {int(target.Id): float(target.cumulative_damage) for target in self.targets}
-        total = float(sum(by_target.values()))
-        reason = self._episode_termination_reason()
-        return {
-            'task_mode': self.task_mode,
-            'env_agent_type': self.env_agent_type,
-            'env_agent_action_type': self.env_agent_action_type,
-            'effective_config': self.effective_config.to_dict(),
-            'world_bounds': self.world_bounds.tolist(),
-            'scene_scale': self.scene_scale,
-            'target_initialization': self.target_initialization,
-            'spatial_dim': self.spatial_dim,
-            'plane_altitude': self.plane_altitude,
-            'attack_distance': list(self.attack_distance),
-            'fire_range': self.fire_range,
-            'step_target_damage': self.step_target_damage,
-            'target_damage': total,
-            'target_damage_by_target': by_target,
-            'episode_returns': {'Red': -total, 'Blue': total} if self.task_mode == 'damage' else None,
-            'episode_done': reason is not None,
-            'termination_reason': reason,
-        }
-
-    def get_agents_dim_info(self):
-        n_entities = self.red_agent_n + self.blue_agent_n + self.target_n
-        agents_dim_info = {
-            "target_n": self.target_n,
-            "red_agent_n": self.red_agent_n,
-            "blue_agent_n": self.blue_agent_n,
-            "red_scout_n": self.red_scout_n,
-            "red_disturb_n": self.red_disturb_n,
-            "red_attack_n": self.red_attack_n,
-            "blue_scout_n": self.blue_scout_n,
-            "blue_disturb_n": self.blue_disturb_n,
-            "blue_attack_n": self.blue_attack_n,
-            # 局部观测维度：相对位置 + 相对速度 + health + alive + 阵营标志
-            "scout_obs_dim": OBS_ENTITY_DIM,
-            "disturb_obs_dim": OBS_ENTITY_DIM,
-            "attack_obs_dim": OBS_ENTITY_DIM,
-            "scout_action_dim": EnvDim,
-            "disturb_action_dim": EnvDim,
-            "attack_action_dim": EnvDim,
-            # 全局状态维度：每个实体的 [绝对位置 + 绝对速度 + is_alive]
-            "global_state_dim": n_entities * OBS_ENTITY_DIM,
-        }
-        return agents_dim_info
-
-    def create_world(self):
-        world = []
-
-        # 按照次序初始化智能体
-        Id = 0
-        render_id = 0
-
-        # 初始化红方侦查智能体
-        for _ in range(self.red_scout_n):
-            world.append(ScoutAgent('Red', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        # 初始化红方软杀伤智能体
-        for _ in range(self.red_disturb_n):
-            world.append(DisturbAgent('Red', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        # 初始化红方打击智能体
-        for _ in range(self.red_attack_n):
-            world.append(AttackAgent('Red', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        render_id = 0
-
-        # 初始化蓝方侦查智能体
-        for _ in range(self.blue_scout_n):
-            world.append(ScoutAgent('Blue', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        # 初始化蓝方软杀伤智能体
-        for _ in range(self.blue_disturb_n):
-            world.append(DisturbAgent('Blue', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        # 初始化蓝方打击智能体
-        for _ in range(self.blue_attack_n):
-            world.append(AttackAgent('Blue', Id, render_id))
-            Id += 1
-            render_id += 1
-
-        render_id = 0
-
-        # 初始化保护目标点
-        for _ in range(self.target_n):
-            world.append(Entity(Id, render_id, task_mode=self.task_mode,
-                                target_health=self.target_health))
-            Id += 1
-            render_id += 1
-
-        return world
-
-    def get_agents(self):
-        return self.agents
-
-    def get_world(self):
-        return self.world
-
-    def get_agents_flying_actions(self):
-        return [one.get_flying_action() for one in self.agents]
-
-    def get_agents_actions(self):
-        return [one.get_action() for one in self.agents]
-
-    def get_status(self):
-        return [agent.get_status() for agent in self.world]
 
     def step(self, flying_action_n):
         if self.dynamics is not None:
@@ -318,9 +204,9 @@ class World:
 
         self._apply_automatic_fire(flying_action_n)
 
-        snapshot = WorldKinematics(self.world, self._color_code, self._type_code,
+        snapshot = WorldKinematics(self.entities, self._color_code, self._type_code,
                                    attack_distance=self.attack_distance)
-        for agent in self.world:
+        for agent in self.entities:
             health_before = float(agent.Health) if self.record_events else None
             agent.update_status(snapshot)
             if getattr(agent, "_clamped_axes", None):
@@ -331,13 +217,13 @@ class World:
         self.update_alive_agents()
 
     def _apply_automatic_fire(self, flying_action_n):
-        positions = np.asarray([entity.position for entity in self.world], dtype=np.float64)
-        health = np.asarray([entity.Health for entity in self.world], dtype=np.float64)
+        positions = np.asarray([entity.position for entity in self.entities], dtype=np.float64)
+        health = np.asarray([entity.Health for entity in self.entities], dtype=np.float64)
         fire_range = self.fire_range
         for i, agent in enumerate(self.agents):
             agent.set_flying_action(flying_action_n[i])
             if agent.Type != "Attack":
-                agent.set_function_action(agent.choose_function_ruled_action(self.world))
+                agent.set_function_action(agent.choose_function_ruled_action(self.entities))
                 continue
             fire = False
             if agent.Health > 0:
@@ -387,7 +273,7 @@ class World:
                 victim_code = 0 if target.Color == "Red" else 1
                 fire_mask &= previous_world.color_code != victim_code
             for index in np.flatnonzero(fire_mask):
-                source = self.world[int(index)]
+                source = self.entities[int(index)]
                 separation = distance(victim_pos, previous_world.positions[int(index)])
                 damage = AttackIntensity * attack_intensity_ratio(float(separation), previous_world.attack_distance)
                 if damage > 0:
@@ -438,16 +324,3 @@ class World:
                 "self_destruct", target, target, combat_after, target.Health,
                 combat_after - float(target.Health), 0,
             )
-
-    def get_red_blue_relative_distance(self):
-        red_agents = [agent for agent in self.agents if agent.Color == "Red"]
-        blue_agents = [agent for agent in self.agents if agent.Color == "Blue"]
-        red_agents_mean_position = np.mean([agent.get_position() for agent in red_agents], axis=0)
-        blue_agents_mean_position = np.mean([agent.get_position() for agent in blue_agents], axis=0)
-        return np.linalg.norm(red_agents_mean_position - blue_agents_mean_position)
-
-    def get_blue_target_relative_distance(self):
-        blue_agents = [agent for agent in self.agents if agent.Color == "Blue"]
-        targets_mean_position = np.mean([agent.get_position() for agent in self.targets], axis=0)
-        blue_agents_mean_position = np.mean([agent.get_position() for agent in blue_agents], axis=0)
-        return np.linalg.norm(targets_mean_position - blue_agents_mean_position)

@@ -1,15 +1,35 @@
-from had_env.core.function.Function import *
+import numpy as np
+from had_env.geometry import (
+    WorldKinematics,
+    attack_intensity_ratio,
+    distances_from,
+    disturb_intensity_ratio,
+    rotate_restrict_velocity,
+)
+from had_env.config import (
+    AttackIntensity,
+    BlueAmaxCoef,
+    BlueVmaxCoef,
+    Boundary,
+    DisturbIntensity,
+    EnvDim,
+    Interval,
+    PlanarAltitude,
+    aMax,
+    attack_distance_for,
+    initial_health,
+    vDomain,
+    wMax,
+)
 
 
 class Entity:
-    # 定义预保护目标点
+
     def __init__(self, id_, render_id, task_mode='survival', target_health=None):
-        # 定义状态空间中的坐标与速度
         self.position = [0] * EnvDim
         self.initial_position = [0] * EnvDim
         self.velocity = [0] * EnvDim
 
-        # 定义状态空间中的健康值
         if task_mode not in ('survival', 'damage'):
             raise ValueError("task_mode must be survival or damage")
         self.task_mode = task_mode
@@ -26,14 +46,12 @@ class Entity:
         self.pre_position = [0] * EnvDim
         self._clamped_axes = []
 
-        # 定义预保护目标点编号
         self.Id = id_
         self.render_id = render_id
         self.Color = 'Entity'
         self.Type = 'Entity'
 
     def reset(self, initial_position, initial_velocity):
-        # 重置预保护目标点的位置
         self.position = list(initial_position)
         if self.spatial_dim == 2:
             self.position[2] = self.plane_altitude
@@ -74,7 +92,6 @@ class Entity:
         return self.position
 
     def get_status(self):
-        # 给颜色编号
         if self.Color == 'Red':
             color = 1
         elif self.Color == 'Blue':
@@ -82,7 +99,6 @@ class Entity:
         else:
             color = 0
 
-        # 给type编号
         if self.Type == 'Attack':
             ty = 1
         elif self.Type == 'Disturb':
@@ -94,28 +110,24 @@ class Entity:
         return self.position + self.velocity #  + [self.Health]  # + [color, ty, self.Health]  # [p, v, c, t, h]
 
 
-# 定义智能体基类
 class BaseAgent(Entity):
     def __init__(self, color, id_, render_id):
         super(BaseAgent, self).__init__(id_, render_id)
-        # 定义状态空间的属性
+
         self.acceleration = [0] * EnvDim
         self.initial_health = 1.0
         self.Health = 1
 
-        # 定义智能体的其他特征
-        self.Color = color  # 智能体阵营，阵营为Red或Blue
-        self.vMax = vDomain[1] if self.Color == "Red" else vDomain[1] * BlueVmaxCoef  # 最大速度
-        self.vMin = vDomain[0]  # 最小速度
-        self.wMax = wMax  # 最大角速度
+        self.Color = color
+        self.vMax = vDomain[1] if self.Color == "Red" else vDomain[1] * BlueVmaxCoef
+        self.vMin = vDomain[0]
+        self.wMax = wMax
         self.aMax = aMax if self.Color == "Red" else BlueAmaxCoef * aMax
 
-        # 训练时需要调用的接口
         self.Boundary = Boundary
         self.initial_position = None
 
     def reset(self, initial_position, initial_velocity):
-        # 初始化智能体的状态空间
         self.position = list(initial_position)
         self.velocity = list(initial_velocity)
         if self.spatial_dim == 2:
@@ -155,7 +167,6 @@ class BaseAgent(Entity):
         return self.velocity
 
     def get_flying_action(self):
-        # 获取当前智能体的飞行动作空间
         return self.acceleration
 
     def set_flying_action(self, action_list):
@@ -165,9 +176,6 @@ class BaseAgent(Entity):
             self.acceleration = action_list
 
     def update_status(self, world):
-        # 根据场上的状态与动作对下一步状态进行更新
-        # all_agents表示场上所有智能体的类集合
-
         if self.Health > 0:
             self.pre_position = list(self.position)
             self.update_position()
@@ -191,12 +199,10 @@ class BaseAgent(Entity):
     def update_position(self):
         if self.Color == "Entity":
             return
-            
-        # 获取当前飞行状态
+
         now_position = np.array(self.get_position())
         now_velocity = np.array(self.get_velocity())
 
-        # 获取下一时刻的位置
         if getattr(self, 'dynamics', None) is not None:
             self.rigid_state = self._next_rigid_state.copy()
             self._sync_rigid_state()
@@ -206,7 +212,6 @@ class BaseAgent(Entity):
         if self.spatial_dim == 2:
             next_position[2] = self.plane_altitude
 
-        # 基于地图边界对位置进行限制，这里AeroPoint是地图边界点
         self._clamped_axes = []
         if self.Boundary:
             for i in range(len(next_position)):
@@ -217,11 +222,9 @@ class BaseAgent(Entity):
                     next_position[i] = self.world_bounds[i][0]
                     self._clamped_axes.append((i, -1))
 
-        # 更新智能体状态
         self.position = next_position.tolist()
 
     def update_velocity(self):
-        # 获取该时刻的速度和动作
         if self.Color == "Entity":
             return
 
@@ -232,7 +235,7 @@ class BaseAgent(Entity):
         if self.spatial_dim == 2:
             now_velocity[2] = 0.0
             now_flying_action[2] = 0.0
-        # 获取下一时刻的预测速度
+
         next_velocity = now_velocity + now_flying_action * Interval
         speed = float(np.linalg.norm(next_velocity))
         # Keep heading instead of reversing when the commanded increment cancels.
@@ -279,13 +282,10 @@ class BaseAgent(Entity):
                 position, [AttackAgent.get_position() for AttackAgent in AttackAgents],
             )
 
-            # 根据上述距离与打击成功概率函数获取实际的打击强度
             AttackIntensityArray = attack_intensity_ratio(AttackDistanceList, self.attack_distance)
 
-            # 获取打击智能体是否开火的数组
             IsFireArray = np.array([AttackAgent.IsFire for AttackAgent in AttackAgents])
 
-            # 计算打击智能体造成的损伤
             health_loss = AttackIntensity * np.sum(IsFireArray * AttackIntensityArray)
         else:
             health_loss = 0
@@ -299,10 +299,8 @@ class BaseAgent(Entity):
                 [disturb_intensity_ratio(DisturbAgent.get_position(), position,
                                          DisturbAgent.get_velocity(), self.scene_scale) for DisturbAgent in DisturbAgents])
 
-            # 获取干扰智能体是否开启干扰的列表
             IsDisturbArray = np.array([DisturbAgent.IsDisturb for DisturbAgent in DisturbAgents])
 
-            # 计算干扰智能体造成的损伤
             health_loss = DisturbIntensity * np.sum(IsDisturbArray * DisturbIntensityArray)
         else:
             health_loss = 0

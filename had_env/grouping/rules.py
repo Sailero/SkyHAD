@@ -10,7 +10,7 @@ import copy
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from had_env.grouping.domain import DecisionState, Entity, Grouping
+from had_env.grouping.domain import DecisionState, Entity
 from had_env.grouping.environment import KnownOpponentEnv
 
 RULE_VERSION = "rule_group_v1"

@@ -1,14 +1,12 @@
-from had_env.core.agents.base import BaseAgent
-from had_env.core.function.Function import within_sector_area, boundary_loss
-from had_env.core.config import *
+from had_env.agents.base import BaseAgent
+from had_env.geometry import within_sector_area, boundary_loss
+from had_env.config import ScoutAngleMax, ScoutDistanceMax, reward_scout_single
 
 
-# 定义Scout智能体类
 class ScoutAgent(BaseAgent):
     def __init__(self, color, id_, render_id):
-        # 继承基础智能体中的特征
         super(ScoutAgent, self).__init__(color, id_, render_id)
-        # 设立侦察智能体专有特征
+
         self.Type = 'Scout'
 
     def get_function_action(self):
@@ -21,7 +19,6 @@ class ScoutAgent(BaseAgent):
         return self.get_flying_action()
 
     def own_observation(self, world):
-        # 满足两个条件，第一是角度满足，第二是距离满足
         if self.Health > 0:
             return [one for one in world if
                     within_sector_area(self.get_position(), one.get_position(), self.get_velocity(),

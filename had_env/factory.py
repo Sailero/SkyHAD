@@ -1,8 +1,9 @@
 """Single public factory; explicit keyword values override configuration files."""
 from dataclasses import fields
 from had_env.config import EnvConfig, load_config
-from had_env.environment import HADParallelEnv, MPEEnv
-from had_env.scenarios.defense import Scenario
+from had_env.environment import HADParallelEnv
+from had_env.mpe import MPEEnv
+from had_env.scenario import Scenario
 
 
 def make_env(scenario_name="defense", *, config=None, **kwargs):

@@ -14,8 +14,8 @@ from gymnasium.utils import seeding
 from pettingzoo import ParallelEnv
 
 from had_env.actions import ACCELERATION_PRIMITIVES, PLANAR_ACCELERATION_PRIMITIVES
-from had_env.core.config import Interval
-from had_env.scenarios.defense import Scenario
+from had_env.config import Interval
+from had_env.scenario import Scenario
 
 
 class HADParallelEnv(ParallelEnv):
@@ -74,12 +74,12 @@ class HADParallelEnv(ParallelEnv):
             if weights.shape != (4,) or not np.isfinite(weights).all():
                 raise ValueError("reward_weights must contain four finite values")
             self.reward_weights = weights.copy()
-        self.world = self.scenario.make_world(seed=seed)
-        self.world.record_events = bool(record_events)
-        self.env_agent_type = self.world.env_agent_type
-        self.env_agent_action_type = self.world.env_agent_action_type
+        self.simulation = self.scenario.make_simulation(seed=seed)
+        self.simulation.record_events = bool(record_events)
+        self.env_agent_type = self.simulation.env_agent_type
+        self.env_agent_action_type = self.simulation.env_agent_action_type
         self.continuous = continuous or self.env_agent_action_type != 'acceleration'
-        self.effective_config = self.world.effective_config
+        self.effective_config = self.simulation.effective_config
         self._self_state_size = (13 if self.env_agent_type != 'particle' else
                                  6 if self.env_agent_action_type == 'position' else 0)
         self.possible_agents = ([f"red_{i}" for i in range(self.scenario.red_count)]
@@ -90,7 +90,7 @@ class HADParallelEnv(ParallelEnv):
             agent: tuple(name for name in self.entity_names if name != agent)
             for agent in self.possible_agents
         }
-        from had_env.core.config import OBS_ENTITY_DIM
+        from had_env.config import OBS_ENTITY_DIM
         shape = (len(self.entity_names) - 1, OBS_ENTITY_DIM)
         self.observation_spaces = {a: spaces.Box(-np.inf, np.inf, shape, np.float32)
                                    for a in self.possible_agents}
@@ -102,7 +102,7 @@ class HADParallelEnv(ParallelEnv):
                                   else spaces.Discrete(len(self.acceleration_primitives)))
                               for a in self.possible_agents}
         if self.env_agent_action_type != 'acceleration':
-            self.action_spaces = {a: self.world.control_space for a in self.possible_agents}
+            self.action_spaces = {a: self.simulation.control_space for a in self.possible_agents}
         state_size = len(self.entity_names)*OBS_ENTITY_DIM + (13*len(self.possible_agents)+3 if self.env_agent_type != 'particle' else 0)
         self.state_space = spaces.Box(-np.inf, np.inf, (state_size,), np.float32)
         self._all_actions = (1,) * len(self.acceleration_primitives)
@@ -122,7 +122,7 @@ class HADParallelEnv(ParallelEnv):
         """Reseed only this environment and its spaces; call reset afterward."""
         self.np_random, value = seeding.np_random(seed)
         self.np_random_seed = int(value)
-        self.world.np_random = self.np_random
+        self.simulation.np_random = self.np_random
         children = np.random.SeedSequence(value).spawn(2 * len(self.possible_agents))
         for i, agent in enumerate(self.possible_agents):
             self.action_spaces[agent].seed(int(children[2*i].generate_state(1)[0]))
@@ -133,12 +133,12 @@ class HADParallelEnv(ParallelEnv):
     def reset(self, seed=None, options=None):
         if seed is not None:
             self.seed(seed)
-        native_obs, _, _ = self.scenario.reset_world(self.world, options=options)
+        native_obs, _, _ = self.simulation.reset(evaluate=bool((options or {}).get("evaluate", self.scenario.evaluate)))
         self.agents = self.possible_agents.copy()
         self.num_cycles, self.outcome_red = 0, 0
         self._has_reset, self._closed = True, False
         obs = self._observations(native_obs, self.agents)
-        task_info = self.world.task_info()
+        task_info = self.simulation.task_info()
         infos = {a: self._info(a, task_info=task_info) for a in self.agents}
         if self.render_mode == "human":
             self.render()
@@ -205,19 +205,19 @@ class HADParallelEnv(ParallelEnv):
             for a in acting
         }
         batch = [decoded.get(a, self._neutral_action(a)) for a in self.possible_agents]
-        self.world.step_physics(batch)
-        native_obs = self.scenario.observation(self.world)
-        native_rewards = self.scenario.reward(self.world)
+        self.simulation.step_physics(batch)
+        native_obs = self.simulation.get_observation(is_relative_observation=True)
+        native_rewards = self.simulation.get_reward()
         self.num_cycles += 1
-        self.outcome_red = self.scenario.done(self.world)
-        global_terminated = bool(self.world.is_episode_done())
+        self.outcome_red = int(self.simulation.is_terminal())
+        global_terminated = bool(self.simulation.is_episode_done())
         global_truncated = bool(self.num_cycles >= self.max_cycles and not global_terminated)
         terminations = {
             a: bool(global_terminated or (self.task_mode == "survival" and self._entity(a).Health <= 0))
             for a in acting
         }
         truncations = {a: bool(self.num_cycles >= self.max_cycles and not terminations[a]) for a in acting}
-        task_info = self.world.task_info()
+        task_info = self.simulation.task_info()
         rewards, infos = {}, {}
         for a in acting:
             info = self._info(a, native_rewards, task_info=task_info,
@@ -234,7 +234,7 @@ class HADParallelEnv(ParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def _entity(self, agent):
-        return self.world.agents[self.agent_name_mapping[agent]]
+        return self.simulation.agents[self.agent_name_mapping[agent]]
 
     def _info(self, agent, rewards=None, *, task_info=None,
               global_terminated=False, global_truncated=False):
@@ -244,20 +244,20 @@ class HADParallelEnv(ParallelEnv):
         real = float(rewards["RealReward"][side]) if rewards else 0.
         latent = list(map(float, rewards["LatentReward"][side][index])) if rewards else [0.] * 4
         alive = bool(entity.Health > 0)
-        task = task_info if task_info is not None else self.world.task_info()
+        task = task_info if task_info is not None else self.simulation.task_info()
         team_reward = ((-1.0 if side == "Red" else 1.0) * float(task["step_target_damage"])
                        if self.task_mode == "damage" else real)
         mask = None
-        if getattr(self.world, "entity_mask", None) is not None:
+        if getattr(self.simulation, "entity_mask", None) is not None:
             index = self.agent_name_mapping[agent]
-            if index < len(self.world.entity_mask):
-                mask = tuple(self.world.entity_mask[index])
+            if index < len(self.simulation.entity_mask):
+                mask = tuple(self.simulation.entity_mask[index])
                 if self.task_mode == "damage" and not alive:
                     mask = (0.0,) * len(mask)
         return {**task, "target_damage_by_target": dict(task["target_damage_by_target"]),
                 "episode_returns": (None if task["episode_returns"] is None else dict(task["episode_returns"])),
                 "entity_id": int(entity.Id), "side": side.lower(), "role": entity.Type.lower(),
-                "spatial_dim": self.spatial_dim, "plane_altitude": float(self.world.plane_altitude),
+                "spatial_dim": self.spatial_dim, "plane_altitude": float(self.simulation.plane_altitude),
                 "alive": alive, "agent_mask": float(alive), "health": float(entity.Health),
                 "action_mask": None if self.continuous else self._all_actions if alive else self._noop_actions,
                 "observation_entities": self._observation_entities[agent],
@@ -268,112 +268,28 @@ class HADParallelEnv(ParallelEnv):
                 "bootstrap_mask": float(not global_terminated),
                 "cycle": self.num_cycles, "sim_time": self.num_cycles * Interval,
                 "max_cycles": self.max_cycles, "remaining_cycles": max(0, self.max_cycles - self.num_cycles),
-                "events": copy.deepcopy(self.world.last_physics_events),
-                "core_version": self.world.core_version, "physics_protocol": self.world.physics_protocol}
+                "events": copy.deepcopy(self.simulation.last_physics_events),
+                "core_version": self.simulation.core_version, "physics_protocol": self.simulation.physics_protocol}
 
     def state(self):
         if not self._has_reset:
             raise RuntimeError("Call reset before requesting state")
-        state = self.world.get_global_state()
+        state = self.simulation.get_global_state()
         if self.env_agent_type != 'particle':
-            for entity in self.world.agents:
+            for entity in self.simulation.agents:
                 state.extend(entity.rigid_state.tolist() if entity.Health > 0 else [0.]*13)
-            state.extend([self.num_cycles, self.world.target_damage, float(self.task_mode == 'damage')])
+            state.extend([self.num_cycles, self.simulation.target_damage, float(self.task_mode == 'damage')])
         return np.asarray(state, dtype=np.float32)
 
     def render(self):
         if not self._has_reset or self._closed:
             raise RuntimeError("Call reset before rendering")
         if self.render_mode == "rgb_array":
-            return self.world.render_rgb_array()
+            return self.simulation.render_rgb_array()
         if self.render_mode == "human":
-            self.world.render()
+            self.simulation.render()
         return None
 
     def close(self):
-        self.world.close()
+        self.simulation.close()
         self._closed = True
-
-
-class MPEEnv:
-    """Fixed-order MPE-style list interface (not the old Gym package).
-
-    ``reset`` returns obs_n; ``step`` returns obs_n, reward_n, done_n, info.
-    Observations are flattened native rows. Survival dead slots are zeroed
-    after their final transition. Damage dead slots immediately receive zero
-    observations and keep their team reward stream until the world ends.
-    Actions for already-dead slots are ignored. Discrete
-    actions are integer indices, or an explicit one-hot vector matching the
-    action space (9 entries in 2D, 27 in 3D).
-    ``info['n']`` retains termination versus truncation for each fixed slot.
-    """
-
-    def __init__(self, env):
-        self.parallel_env = env
-        self.possible_agents = env.possible_agents.copy()
-        self.n = len(self.possible_agents)
-        self.action_space = [env.action_space(a) for a in self.possible_agents]
-        self.observation_space = [spaces.flatten_space(env.observation_space(a)) for a in self.possible_agents]
-        self.world, self.metadata = env.world, env.metadata
-        self._done = {a: False for a in self.possible_agents}
-        self._infos = {}
-
-    @property
-    def agents(self):
-        return self.world.agents
-
-    @property
-    def unwrapped(self):
-        return self.parallel_env
-
-    def reset(self, seed=None, options=None):
-        obs, self._infos = self.parallel_env.reset(seed=seed, options=options)
-        self._done = {a: False for a in self.possible_agents}
-        return [spaces.flatten(self.parallel_env.observation_space(a), obs[a]) for a in self.possible_agents]
-
-    def step(self, actions):
-        if len(actions) != self.n:
-            raise ValueError(f"MPE actions must have {self.n} fixed slots")
-        joint = {}
-        for a, value in zip(self.possible_agents, actions):
-            if a not in self.parallel_env.agents:
-                continue
-            if self.parallel_env.task_mode == "damage" and self.parallel_env._entity(a).Health <= 0:
-                joint[a] = self.parallel_env._neutral_action(a) if self.parallel_env.continuous else 0
-                continue
-            array = np.asarray(value)
-            action_count = self.parallel_env.action_space(a).n if isinstance(self.parallel_env.action_space(a), spaces.Discrete) else None
-            if action_count is not None and array.shape == (action_count,):
-                if not np.all((array == 0) | (array == 1)) or np.sum(array) != 1:
-                    raise ValueError(f"MPE vector actions must be explicit length-{action_count} one-hot vectors")
-                value = int(np.argmax(array))
-            joint[a] = value
-        obs, rewards, terms, truncs, infos = self.parallel_env.step(joint)
-        rows, values, dones, details = [], [], [], []
-        for i, a in enumerate(self.possible_agents):
-            self._done[a] = self._done[a] or terms.get(a, False) or truncs.get(a, False)
-            rows.append(spaces.flatten(self.parallel_env.observation_space(a), obs[a]) if a in obs else np.zeros(self.observation_space[i].shape, np.float32))
-            values.append(rewards.get(a, 0.))
-            dones.append(self._done[a])
-            info = infos.get(a, {**self._infos.get(a, {}), "inactive": True})
-            if a not in infos:
-                info = {**info, "RealReward": 0., "LatentReward": [0.] * 4, "events": []}
-            self._infos[a] = info
-            details.append(info)
-        return rows, values, dones, {"n": details}
-
-    def seed(self, seed=None):
-        return self.parallel_env.seed(seed)
-
-    def state(self):
-        return self.parallel_env.state()
-
-    def render(self, mode=None):
-        if mode is not None:
-            if mode not in self.metadata["render_modes"]:
-                raise ValueError("unsupported render mode")
-            self.parallel_env.render_mode = mode
-        return self.parallel_env.render()
-
-    def close(self):
-        self.parallel_env.close()
