@@ -1,6 +1,6 @@
 """SkyHAD environments for multi-agent reinforcement learning."""
 
-__version__ = "4.0.0b1"
+__version__ = "4.0.0rc1"
 
 
 def make_env(*args, **kwargs):
