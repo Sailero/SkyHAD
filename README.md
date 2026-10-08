@@ -120,7 +120,7 @@ The native route is `make_env -> HADParallelEnv -> Simulation -> World.step`, fo
 | `make_env.py` | Preserve the short public import used by existing environment consumers. |
 | `docs/API.md` | Environment contracts, units, observations, rewards and hierarchical interface. |
 | `docs/MODELING.md` | Defender task definitions and the mathematical model behind the simulator. |
-| `docs/PROBLEM_FORMULATION.pdf` | The requested 33-page paper-oriented formulation of all 16 themes. |
+| `docs/PROBLEM_FORMULATION.pdf` | The 36-page IEEE-style defender formulation of all 16 themes. |
 | `docs/PROBLEM_FORMULATION.tex` | Editable mathematical source for the formulation PDF. |
 | `docs/VALIDATION.md` | Test commands, behavior comparisons and release checkpoints. |
 | `examples/quickstart.py` | A complete minimal Parallel reset/action/step/close loop. |
@@ -173,13 +173,13 @@ The native route is `make_env -> HADParallelEnv -> Simulation -> World.step`, fo
 
 ## Mathematical formulation
 
-[MODELING.md](docs/MODELING.md) explains the two tasks and the defender's Dec-POMDP. [PROBLEM_FORMULATION.pdf](docs/PROBLEM_FORMULATION.pdf) contains 33 pages: an introduction and contents, then two pages for each of the 16 themes. Its [LaTeX source](docs/PROBLEM_FORMULATION.tex) is editable for a paper's Problem Formulation chapter. The formulation distinguishes the mathematical Markov state from the packed critic features returned by `state()`.
+[MODELING.md](docs/MODELING.md) explains the two tasks and the defender's Dec-POMDP. [PROBLEM_FORMULATION.pdf](docs/PROBLEM_FORMULATION.pdf) contains 36 pages in IEEE journal style: four pages of shared formulation and an index, then two pages for each of the 16 themes. The normal body text is 10pt; each theme references shared definitions and gives its model, control, observation and defender objective. Its [LaTeX source](docs/PROBLEM_FORMULATION.tex) is editable for a paper's Problem Formulation chapter. The formulation distinguishes the mathematical Markov state from the packed critic features returned by `state()`.
 
 Reproducible checks and their results are recorded in [VALIDATION.md](docs/VALIDATION.md).
 
 ## Versions and tools
 
-SkyHAD **v4.0.0** focuses on the environment and general hierarchical decisions. The Python distribution remains `had-env`; imports remain `had_env` and the root `make_env` entry point.
+SkyHAD **v4.0.1** focuses on the environment and general hierarchical decisions. This patch revises the mathematical documentation and preserves v4.0.0 environment behavior. The Python distribution remains `had-env`; imports remain `had_env` and the root `make_env` entry point.
 
 The full desktop viewer, recording, replay, exact branching, and export tools live in [SkyHAD-Workbench](https://github.com/Sailero/SkyHAD-Workbench). Its v1.0.0 release is pinned to SkyHAD v3.0.0. The environment v4 package has no desktop CLI or Qt dependency.
 

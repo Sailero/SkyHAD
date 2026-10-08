@@ -1,6 +1,6 @@
 # SkyHAD v4 mathematical model
 
-The [33-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There is one overview page and two pages for each model/control/task combination. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
+The [36-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There are four shared-formulation pages and two pages for each model/control/task combination. The PDF uses IEEE journal layout with a 10pt normal body; topic pairs reference the common formulas. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
 
 | Model | Control interfaces | Tasks | Themes |
 | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ Own health is absent from the self block. Other UAV attitudes/rates, policy memo
 [(p-b^-)/(b^+-b^-),v/(2V_{\max}),h,\ell,R,B,P].
 \]
 
-Dead blocks are zero. Particle state has length \(11M\), omitting the clock and cumulative damage. Rigid models append all UAV raw thirteen-value states (dead zero), then `[cycle,total_target_damage,is_damage]`, giving \(11M+13N+3\). Opponent memory and grouping commitments still require explicit augmentation. A recurrent critic or augmented state can be appropriate when the packed feature is insufficient.
+Dead blocks are zero. Particle state has length \(11M\), omitting the clock and cumulative damage. Rigid models append all UAV raw thirteen-value states (dead zero), then `[cycle,total_target_damage,is_damage]`, giving \(11M+13N+3\). Opponent memory and grouping commitments still require explicit augmentation. Exact continuation values for history-dependent Red policies also condition on the relevant Red histories or recurrent policy memories. Let \(\xi_t\) denote critic information augmented with missing transition-state information and relevant policy history/memory, including the frozen Blue memory. A recurrent critic or sufficient explicit augmentation is needed when the packed feature alone does not supply this information.
 
 ## Geometry and reset distribution
 
@@ -109,7 +109,7 @@ where \(\mathrm{sat}_L(z)=z\min(1,L/\|z\|)\), extended by zero at \(z=0\). It do
 
 ## Rigid-body transition
 
-World coordinates are east-north-up (ENU); body coordinates are forward-left-up (FLU). The scalar-first unit quaternion maps body to world. The thirteen stored values represent twelve physical degrees of freedom since \(q\in S^3\) and \(q\sim-q\). With body force excluding gravity,
+World coordinates are east-north-up (ENU); body coordinates are forward-left-up (FLU). The scalar-first unit quaternion maps body to world. The six configuration degrees of freedom and six velocity coordinates form a twelve-dimensional rigid-body state. It stores thirteen values because the unit quaternion has four entries constrained by \(q\in S^3\) and \(q\sim-q\). With body force excluding gravity,
 
 \[
 \dot p=v,\quad \dot v=R(q)F_B/m-ge_3,\quad
@@ -215,7 +215,7 @@ d_t=\sum_kL_k,\qquad R_R=-d_t,\quad R_B=d_t,\qquad
 
 There is no health budget, team-size normalization, asset-count normalization or Survival bonus. Every team member receives the full shared team reward, including dead Damage slots and damage occurring after Red extinction. Summing teammates' duplicate rewards would change the objective. At \(\gamma=1\), team returns are \((-\sum_kD_k,+\sum_kD_k)\); a caller may instead optimize a discounted task.
 
-Native horizon H is sampling truncation, not a victory. The team bootstrap mask is \(b_t=1-\mathbf1_{\text{natural completion}}\), including one at truncation and after individual death. Natural completion takes priority if it coincides with H. A CTDE target is \(y_t=R_t+\gamma b_tQ^-(g(s'),a_R')\), with target-policy successor actions. Actor losses use participation before the transition, so a lethal final action remains trainable. Entity masks use 1 for living/valid entries; participation, actor retirement and global completion express different facts.
+Native horizon H is sampling truncation, not a victory. The team bootstrap mask is \(b_t=1-\mathbf1_{\text{natural completion}}\), including one at truncation and after individual death. Natural completion takes priority if it coincides with H. A CTDE target is \(y_t=R_t+\gamma b_tQ^-(\xi_{t+1},a_R')\), with target-policy successor actions. Actor losses use participation before the transition, so a lethal final action remains trainable. Entity masks use 1 for living/valid entries; participation, actor retirement and global completion express different facts.
 
 ## General grouping/SMDP extension
 
@@ -227,7 +227,7 @@ For a physical-step discount \(\gamma\), the exact SMDP target is
 
 \[
 \bar R_t=\sum_{j=0}^{d-1}\gamma^jR_{t+j},\qquad
-y_t=\bar R_t+\gamma^db_tV(s_{t+d}).
+y_t=\bar R_t+\gamma^db_tV(\xi_{t+d}).
 \]
 
 Current grouping Damage reward is the undiscounted sum, directly matching \(\gamma=1\). Changing only the bootstrap to \(\gamma^d\) does not discount internal rewards; a discounted physical objective must reconstruct those rewards or explicitly choose a different macro objective. Grouping Survival uses terminal success 0/1 and its configured horizon rule (`red_win`, `draw` or `blue_win`), unlike native ±10 with horizon truncation. Grouping Damage retains sampling truncation and its associated bootstrap. These extension conventions do not modify the sixteen native themes.

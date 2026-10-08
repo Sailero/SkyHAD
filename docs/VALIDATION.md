@@ -30,7 +30,7 @@ The comparison passed for reset and every recorded step: actions, observations, 
 
 The portable regression data in `tests/data/` provide ongoing checks. The current physical cases and all four grouping episode expectations were copied unchanged from the pre-refactor repository. Only unused historical records and metadata were removed. Expected trajectories were not regenerated from the refactored implementation.
 
-## Recorded acceptance
+## Recorded v4.0.0 acceptance
 
 The following checks ran on 2026-10-08 and 2026-10-09:
 
@@ -51,11 +51,25 @@ The complete environment suite exposes upstream PettingZoo and Pygame deprecatio
 
 After integration into main, the full suite passed again: **102 passed, 3 upstream deprecation warnings in 15.74 seconds**. The final v4.0.0 wheel contains 37 package/resource files and is **78,295 bytes**, excluding third-party dependencies. Its packaged files match the merged source byte for byte. There are no desktop entry points, Qt/Torch dependencies, old core wrappers or algorithm-specific modules in the wheel.
 
-The repository ships **55 files**; its source archive is approximately **0.53 MB**, including the mathematical PDF, editable source and retained tests. Local virtual environments, experiment output, build/cache files and the user-supplied reference article are not distributed. Validation artifacts are archived outside the source tree. All 33 formulation pages were rendered and checked for theme/page correspondence, formula overflow, column crossings and footer clearance; independent code/math review found no outstanding issues.
+The v4.0.0 repository shipped **55 files**; its source archive was approximately **0.53 MB**, including the mathematical PDF, editable source and retained tests. Local virtual environments, experiment output, build/cache files and the user-supplied reference article are not distributed. Validation artifacts are archived outside the source tree. All 33 formulation pages were rendered and checked for theme/page correspondence, formula overflow, column crossings and footer clearance; independent code/math review found no outstanding issues.
 
 Workbench checks include real offscreen Qt event loops and owned workers, recording, replay, exact saved branching, legacy v3 continuation, and PNG/SVG/PDF/MP4 export. Its independent runtime contains the original v3 environment wheel, so changing the main environment checkout does not change workbench behavior. Workbench tests and launcher are maintained in [SkyHAD-Workbench](https://github.com/Sailero/SkyHAD-Workbench).
 
 These checks establish implementation consistency and interface behavior. They do not report trained-policy performance or aircraft parameter identification. The simulator's flight and boundary assumptions are stated in [MODELING.md](MODELING.md).
+
+## v4.0.1 documentation revision
+
+The 2026-10-09 patch changes the mathematical source/PDF and their documentation references, plus the package version metadata. All dynamics, controls, interactions, observations, rewards, termination, interfaces and retained test data remain unchanged from v4.0.0. The independent workbench remains v1.0.0.
+
+| Check | Result |
+| --- | --- |
+| Final PDF rebuilt from editable source | 36 A4 pages, IEEEtran journal layout, 10pt normal body |
+| Theme map | Four overview pages; themes 1-16 occupy exactly two pages each, pages 5-36 |
+| Artifact checks | All pages rendered and inspected; embedded fonts; resolved equation/page links; no overfull boxes, missing glyphs, cropping or overlaps |
+| Mathematical preservation | Model parameters/controllers, S/A/O/T/R, reset laws and sampling semantics independently checked |
+| Final retained environment suite with Pygame | 102 passed; 3 upstream deprecation warnings |
+
+The revision separates shared laws from theme-specific instances and clarifies exact value conditioning for recurrent policies. It distinguishes a six-DOF vehicle from its twelve-dimensional state stored in thirteen values, including a unit quaternion. The original 33-page PDF and its validation evidence remain recoverable at v4.0.0. One-off compilation, rendering and review artifacts stay outside the repository.
 
 ## Recovery checkpoints
 
@@ -68,6 +82,9 @@ These checks establish implementation consistency and interface behavior. They d
 | `v4.0.0a3` | Readable core and focused tests |
 | `v4.0.0b1` | Environment-first README, API and packaging |
 | `v4.0.0rc1` | English mathematical formulation and editable source |
-| `v4.0.0` | Final integrated release |
+| `v4.0.0` | Final integrated release; original 33-page formulation |
+| `v4.0.1a1` | Four-page common formulation and sixteen theme instances |
+| `v4.0.1rc1` | IEEE-style 36-page formulation and visual acceptance |
+| `v4.0.1` | Final mathematical documentation revision |
 
 The independent tool repository has its own `v1.0.0` tag. To inspect a prior environment version without changing your working checkout, use `git worktree add <new-directory> <tag>` and install it in a separate Python environment. Tags and normal Git history preserve all stages; no history was rewritten.
