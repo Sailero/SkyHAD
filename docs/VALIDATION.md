@@ -32,7 +32,7 @@ The portable regression data in `tests/data/` provide ongoing checks. The curren
 
 ## Recorded acceptance
 
-The following checks ran on 2026-10-08:
+The following checks ran on 2026-10-08 and 2026-10-09:
 
 | Check | Result |
 | --- | --- |
@@ -44,6 +44,7 @@ The following checks ran on 2026-10-08:
 | Installed wheel: native/MPE state, reward and done parity | 16/16 themes passed |
 | Installed wheel: grouping episodes | 6/6 model/task pairs passed |
 | Installed wheel: basic RGB rendering and packaged icons | 3/3 models passed; state and RNG unchanged |
+| Mathematical PDF | 33 pages; 16 exact two-page themes; all pages rendered and inspected |
 | Independent workbench v1.0.0, pinned to v3.0.0 | 66 passed; 2 optional Torch tests skipped |
 
 The complete environment suite exposes upstream PettingZoo and Pygame deprecation warnings. The base-only run has no GUI dependency and imports no Pygame, Qt or Torch. The package was installed into a separate runtime and exercised outside the source checkout; source-only imports were not used as evidence of wheel installation.
