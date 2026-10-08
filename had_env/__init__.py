@@ -1,6 +1,6 @@
-"""Standalone HAD environments and optional research visualization."""
+"""SkyHAD environments for multi-agent reinforcement learning."""
 
-__version__ = "4.0.0a2"
+__version__ = "4.0.0a3"
 
 
 def make_env(*args, **kwargs):
