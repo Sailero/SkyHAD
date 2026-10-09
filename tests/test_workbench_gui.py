@@ -193,6 +193,67 @@ def test_view_and_scientific_export_use_recorded_world_bounds(window):
         figure.close()
 
 
+def test_figure_side_glyphs_distinguish_aircraft_and_roles(window):
+    import numpy as np
+    from skyhad_workbench.export import EpisodeFigure
+    episode = recording()
+    rows = episode.frames[0]["entities"]
+    rows[0].update(env_agent_type="UAV_fixedwing", attitude=[1, 0, 0, 0])
+    rows[1].update(env_agent_type="UAV_quadrotor", attitude=[1, 0, 0, 0])
+    figure = EpisodeFigure(episode, width=800, height=600)
+    original = copy.deepcopy(episode.to_dict())
+    try:
+        figure.draw(episode.frames[0])
+        first, second = [collection.get_paths()[0].vertices for collection in figure.altitude.collections[:2]]
+        assert not np.array_equal(first, second)
+        texts = [text.get_text() for text in figure.map.texts]
+        assert "A" in texts and "S" in texts
+        top = figure.map.collections[0].get_paths()[0].vertices
+        assert not np.array_equal(first, top)
+        assert episode.to_dict() == original
+    finally:
+        figure.close()
+
+
+def test_qt_aircraft_bank_role_and_rigid_fallback_are_painted(app):
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtCore import QPointF
+    from skyhad_workbench.views import EntityItem
+    row = dict(id=0, side="red", role="Attack", position=[0, 0, 100], velocity=[1, 0, 0],
+               health=1, alive=True, env_agent_type="UAV_quadrotor", attitude=[1, 0, 0, 0])
+    item = EntityItem(row)
+    def image(value):
+        item.update_entity(value)
+        canvas = QImage(200, 100, QImage.Format.Format_RGB32)
+        canvas.fill(Qt.GlobalColor.white)
+        painter = QPainter(canvas)
+        painter.translate(45, 40)
+        item.paint(painter, None)
+        painter.end()
+        return bytes(canvas.constBits())
+    straight = image(row)
+    assert straight != image({**row, "role": "Scout"})
+    assert straight != image({**row, "attitude": [2**-.5, 2**-.5, 0, 0]})
+    rigid = {**row, "attitude": None, "rigid_state": [0, 0, 100, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]}
+    first = image(rigid)
+    signature = item._paint_signature
+    second = image({**rigid, "rigid_state": [0, 0, 100, 1, 0, 0, 2**-.5, 0, 0, 2**-.5, 0, 0, 0]})
+    assert signature != item._paint_signature and first != second
+    assert item.shape().contains(QPointF(18, -12))  # Visible badge remains selectable.
+    item.setSelected(True)
+    item.labels = True
+    assert item.boundingRect().contains(QPointF(125, 24))  # HP and bank/pitch labels fit.
+    assert row["attitude"] == [1, 0, 0, 0]
+
+
+def test_figure_bank_cue_changes_when_heading_does_not():
+    import numpy as np
+    from skyhad_workbench.export import EpisodeFigure
+    row = dict(env_agent_type="UAV_fixedwing", attitude=[1, 0, 0, 0])
+    banked = dict(env_agent_type="UAV_fixedwing", attitude=[2**-.5, 2**-.5, 0, 0])
+    assert not np.array_equal(EpisodeFigure._marker(row).vertices, EpisodeFigure._marker(banked).vertices)
+
+
 def test_gui_can_request_a_quadrotor_actuator_flight_session(window):
     requested = []
     window.flight_requested.connect(requested.append)

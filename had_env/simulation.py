@@ -209,6 +209,9 @@ class Simulation(World):
                         (target.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             targets_info_n.append({
                 "position": position,
+                "id": target.Id,
+                "health": float(target.Health),
+                "max_health": float(target.initial_health),
                 "alive": target.Health > 0
             })
         for red_agent in self.red_agents:
@@ -217,10 +220,13 @@ class Simulation(World):
                         (red_agent.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             red_agents_info_n.append({
                 "position": position,
-                "velocity": red_agent.velocity,
+                "velocity": list(red_agent.velocity),
+                "id": red_agent.Id,
+                "health": float(red_agent.Health),
+                "max_health": float(red_agent.initial_health),
                 "type": red_agent.Type,
                 "env_agent_type": self.env_agent_type,
-                "attitude": getattr(red_agent, "attitude", None),
+                "attitude": None if getattr(red_agent, "attitude", None) is None else np.asarray(red_agent.attitude).tolist(),
                 "alive": red_agent.Health > 0
             })
         for blue_agent in self.blue_agents:
@@ -229,14 +235,28 @@ class Simulation(World):
                         (blue_agent.position[2] - self.world_bounds[2][0]) / (self.world_bounds[2][1] - self.world_bounds[2][0])]
             blue_agents_info_n.append({
                 "position": position,
-                "velocity": blue_agent.velocity,
+                "velocity": list(blue_agent.velocity),
+                "id": blue_agent.Id,
+                "health": float(blue_agent.Health),
+                "max_health": float(blue_agent.initial_health),
                 "type": blue_agent.Type,
                 "env_agent_type": self.env_agent_type,
-                "attitude": getattr(blue_agent, "attitude", None),
+                "attitude": None if getattr(blue_agent, "attitude", None) is None else np.asarray(blue_agent.attitude).tolist(),
                 "alive": blue_agent.Health > 0
             })
 
         return targets_info_n, red_agents_info_n, blue_agents_info_n
+
+
+    def _render_metadata(self):
+        """Read-only display diagnostics, separate from observations and rewards."""
+        return dict(step=self.physics_step_count, task_mode=self.task_mode,
+                    world_bounds=self.world_bounds.tolist(),
+                    live_counts={"red": sum(a.Health > 0 for a in self.red_agents),
+                                 "blue": sum(a.Health > 0 for a in self.blue_agents)},
+                    targets=[dict(id=t.Id, health=float(t.Health), max_health=float(t.initial_health))
+                             for t in self.targets],
+                    step_target_damage=self.step_target_damage, target_damage=self.target_damage)
 
 
     def render_rgb_array(self, include_result=True):
@@ -254,6 +274,7 @@ class Simulation(World):
         player.draw(
             self._render_information(),
             self.is_terminal() if include_result else 0,
+            self._render_metadata(),
         )
         # pygame exposes W x H x C; Matplotlib and image writers expect H x W x C.
         return np.transpose(pygame.surfarray.array3d(surface), (1, 0, 2)).copy()
@@ -273,7 +294,7 @@ class Simulation(World):
             self._display_player = DisplayPlayer(screen)
         player = self._display_player
         player.screen.fill(SurfaceColor)
-        player.update(self._render_information(), self.is_terminal())
+        player.update(self._render_information(), self.is_terminal(), self._render_metadata())
         if not player.running:
             self.close()
             return False

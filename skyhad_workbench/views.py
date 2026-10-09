@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, 
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
 from had_env.config import BlueColor, BorderColor, DeadAgentColor, RedColor, SurfaceColor
-from had_env.render.glyphs import airplane_points, heading_angle, rotor_centers
+from had_env.render.glyphs import aircraft_geometry, attitude_label, role_badge, ROLE_LEGEND
 
 
 SIDE_COLORS = {"red": QColor(*RedColor), "blue": QColor(*BlueColor), "targets": QColor(*RedColor)}
@@ -74,7 +74,7 @@ class EntityItem(QGraphicsObject):
         self.update_entity(entity)
 
     def boundingRect(self):
-        return QRectF(-22, -24, 136 if self.labels or self.isSelected() else 52, 54)
+        return QRectF(-24, -26, 176 if self.labels or self.isSelected() else 56, 68)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedChange:
@@ -89,7 +89,9 @@ class EntityItem(QGraphicsObject):
         ):
             path.addRect(QRectF(0, 0, 28, 28))
         else:
-            path.addEllipse(QRectF(-13, -13, 26, 26))
+            path.addEllipse(QRectF(-19, -19, 38, 38))
+            if self.entity.get("env_agent_type") in ("UAV_fixedwing", "UAV_quadrotor"):
+                path.addRect(QRectF(16, -18, 12, 12))
         return path
 
     def update_entity(self, entity: dict):
@@ -97,7 +99,8 @@ class EntityItem(QGraphicsObject):
         self.setPos(point(entity, self.projection))
         signature = (entity.get("health"), entity.get("alive"), entity.get("role"),
                      tuple(entity.get("velocity") or []), entity.get("env_agent_type"),
-                     tuple(entity.get("attitude") or []), self.labels, self.light, self.flash, self.isSelected())
+                     tuple(entity.get("attitude") or []), tuple(entity.get("rigid_state") or []),
+                     self.labels, self.light, self.flash, self.isSelected())
         if signature != self._paint_signature:
             self._paint_signature = signature
             self.setToolTip(f"{entity.get('side')} {entity.get('id')} · {entity.get('role')}\nHP {entity.get('health', '—')}")
@@ -111,6 +114,8 @@ class EntityItem(QGraphicsObject):
         color = QColor(SIDE_COLORS.get(e.get("side"), "#b9c4d5"))
         if not alive:
             color = QColor(*DeadAgentColor)
+        if not self.light:
+            color = color.lighter(160)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         if self.isSelected() or self.flash:
             painter.setPen(cosmetic_pen("#ffffff" if self.flash else color, 1.8))
@@ -131,7 +136,7 @@ class EntityItem(QGraphicsObject):
             else:
                 painter.setBrush(QColor(*RedColor))
                 painter.drawEllipse(QRectF(-8, -8, 16, 16))
-        elif role == "unknown":
+        elif role == "unknown" and e.get("env_agent_type") not in ("UAV_fixedwing", "UAV_quadrotor"):
             painter.setPen(cosmetic_pen(color, 1.1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QRectF(-7, -7, 14, 14))
@@ -140,38 +145,62 @@ class EntityItem(QGraphicsObject):
         else:
             model = e.get("env_agent_type", "particle")
             if model in ("UAV_fixedwing", "UAV_quadrotor"):
-                angle = math.degrees(heading_angle(e, self.projection))
-            painter.rotate(angle)
-            if model == "UAV_fixedwing":
-                painter.drawPolygon(QPolygonF([QPointF(*p) for p in airplane_points(size=size)]))
-            elif model == "UAV_quadrotor":
-                rotors = rotor_centers(size=size)
+                geometry = aircraft_geometry(e, self.projection, max(10, size))
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                for polygon in geometry["polygons"]:
+                    painter.drawPolygon(QPolygonF([QPointF(*p) for p in polygon]))
                 painter.setPen(cosmetic_pen(color, 2))
-                painter.drawLine(QPointF(*rotors[0]), QPointF(*rotors[2]))
-                painter.drawLine(QPointF(*rotors[1]), QPointF(*rotors[3]))
+                for start, end in geometry["lines"]:
+                    painter.drawLine(QPointF(*start), QPointF(*end))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                for x, y in rotors:
-                    radius = size*.3
+                for (x, y), radius in geometry["circles"]:
                     painter.drawEllipse(QRectF(x-radius, y-radius, 2*radius, 2*radius))
+                if geometry["nose"] is not None:
+                    painter.drawLine(QPointF(0, 0), QPointF(*geometry["nose"]))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor("#ffffff"))
+                    painter.drawEllipse(QPointF(*geometry["nose"]), 2, 2)
+                elif geometry["toward"]:
+                    painter.setBrush(color)
+                    painter.drawEllipse(QRectF(-2, -2, 4, 4))
+                else:
+                    painter.drawLine(QPointF(-3, -3), QPointF(3, 3))
+                    painter.drawLine(QPointF(-3, 3), QPointF(3, -3))
+                painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(color)
-                painter.drawEllipse(QRectF(-size*.2, -size*.2, size*.4, size*.4))
-            elif "attack" in role:
-                painter.drawEllipse(QRectF(-size, -size, 2 * size, 2 * size))
+                painter.drawRoundedRect(QRectF(16, -18, 12, 12), 2, 2)
+                painter.setFont(QFont("Segoe UI", 7))
+                painter.setPen(QColor("#17202f" if not self.light else "#ffffff"))
+                painter.drawText(QRectF(16, -18, 12, 12), Qt.AlignmentFlag.AlignCenter, role_badge(e))
+                painter.setPen(cosmetic_pen(color, 1))
+                for key, label, offset in (("bank", "R", -18), ("pitch", "P", 6)):
+                    painter.drawText(QPointF(offset, 24), label)
+                    points = geometry["indicators"].get(key)
+                    if points:
+                        painter.drawLine(QPointF(*points[0]), QPointF(*points[1]))
+                    else:
+                        painter.drawText(QPointF(offset+9, 24), "?")
             else:
-                # Match DisplayPlayer.draw_agents / draw_isosceles_triangle.
-                top_angle = 45 if "disturb" in role else 36
-                half_base = 2 * size * math.tan(math.radians(top_angle / 2))
-                painter.drawPolygon(QPolygonF([
-                    QPointF(size, 0), QPointF(-size, -half_base), QPointF(-size, half_base),
-                ]))
+                painter.rotate(angle)
+                if "attack" in role:
+                    painter.drawEllipse(QRectF(-size, -size, 2 * size, 2 * size))
+                else:
+                    # Match DisplayPlayer.draw_agents / draw_isosceles_triangle.
+                    top_angle = 45 if "disturb" in role else 36
+                    half_base = 2 * size * math.tan(math.radians(top_angle / 2))
+                    painter.drawPolygon(QPolygonF([
+                        QPointF(size, 0), QPointF(-size, -half_base), QPointF(-size, half_base),
+                    ]))
         painter.restore()
         health = float(e.get("health") or 0)
         if self.labels or self.isSelected():
             painter.setFont(QFont("Segoe UI", 8))
-            painter.setPen(QColor("#28384d"))
-            painter.drawText(QPointF(15, -5), f"{e.get('side', '')[:1].upper()}{e.get('id')}")
+            painter.setPen(QColor("#28384d" if self.light else "#dce6f3"))
+            painter.drawText(QPointF(34, -5), f"{e.get('side', '')[:1].upper()}{e.get('id')}")
             if self.isSelected():
-                painter.drawText(QPointF(15, 8), f"HP {health:.1f}" if e.get("health") is not None else "HP ?")
+                painter.drawText(QPointF(34, 8), f"HP {health:.1f}" if e.get("health") is not None else "HP ?")
+            if e.get("env_agent_type") in ("UAV_fixedwing", "UAV_quadrotor"):
+                painter.drawText(QPointF(34, 23), attitude_label(e))
 
 
 class BattlefieldView(QGraphicsView):
@@ -381,8 +410,7 @@ class BattlefieldView(QGraphicsView):
                 self._path(path, "#a7b4c9", 1, True)
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
-        # The native pygame surface is opaque: use the original RGB palette.
-        painter.fillRect(rect, QColor(*SurfaceColor[:3]))
+        painter.fillRect(rect, QColor(*SurfaceColor[:3]) if self.light else QColor("#17202f"))
         painter.setPen(cosmetic_pen(QColor(*BorderColor[:3]), 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(self._world_rect)
@@ -391,10 +419,14 @@ class BattlefieldView(QGraphicsView):
         painter.save()
         painter.setWorldTransform(self.viewportTransform().inverted()[0], True)
         width, height = self.viewport().width(), self.viewport().height()
-        painter.setPen(QColor("#33465e"))
+        painter.setPen(QColor("#33465e" if self.light else "#dce6f3"))
         painter.setFont(QFont("Segoe UI", 9))
         title = "XY · 平面 / m" if self.projection == "xy" else "XZ · 高度剖面 / m"
         painter.drawText(QPointF(18, 25), title)
+        if any(e.get("env_agent_type") in ("UAV_fixedwing", "UAV_quadrotor") for e in self.frame.get("entities", [])):
+            painter.setFont(QFont("Segoe UI", 8))
+            painter.drawText(QPointF(18, 44), ROLE_LEGEND)
+            painter.setFont(QFont("Segoe UI", 9))
         painter.drawText(QPointF(18, height-15), "滚轮缩放 · 拖动平移 · 点击实体")
         scale = max(self.transform().m11(), 1e-6)
         visible = self.mapToScene(self.viewport().rect()).boundingRect()
@@ -420,12 +452,12 @@ class BattlefieldView(QGraphicsView):
         base = 10 ** math.floor(math.log10(metres))
         length = max(v * base for v in (1, 2, 5) if v * base <= metres)
         pixels = length * scale
-        painter.setPen(cosmetic_pen("#4b607c", 1.5))
+        painter.setPen(cosmetic_pen("#4b607c" if self.light else "#b7c8dd", 1.5))
         x, y = width - pixels - 22, height - 22
         painter.drawLine(QPointF(x, y), QPointF(x+pixels, y))
         painter.drawLine(QPointF(x, y-4), QPointF(x, y+4))
         painter.drawLine(QPointF(x+pixels, y-4), QPointF(x+pixels, y+4))
         painter.drawText(QPointF(x, y-8), f"{length:g} m")
         if self.layers["ranges"]:
-            painter.drawText(QPointF(18, 44), "作用范围为投影；命中以记录事件为准")
+            painter.drawText(QPointF(18, 62), "作用范围为投影；命中以记录事件为准")
         painter.restore()

@@ -69,11 +69,11 @@ OBS_ENTITY_DIM = 11  # Position 3, velocity 3, health, alive and side flags 3.
 ScreenLength = 800
 ScreenWidth = ScreenLength * (AeroPoint[1][1] - AeroPoint[1][0]) / (AeroPoint[0][1] - AeroPoint[0][0])
 ScreenHeight = int(ScreenLength * (AeroPoint[2][1] - AeroPoint[2][0]) / (AeroPoint[0][1] - AeroPoint[0][0]) * 0.5)
-SurfaceColor = (200, 220, 255, 20)
-BorderColor = (150, 200, 255, 50)
-RedColor = (255, 153, 153, 255)
-BlueColor = (153, 204, 255, 255)
-DeadAgentColor = (192, 192, 192, 180)
+SurfaceColor = (238, 243, 248, 255)
+BorderColor = (130, 149, 170, 255)
+RedColor = (158, 41, 50, 255)
+BlueColor = (24, 126, 183, 255)
+DeadAgentColor = (104, 115, 131, 180)
 
 
 @dataclass(frozen=True)

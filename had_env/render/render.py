@@ -13,7 +13,7 @@ from had_env.config import (
 from pathlib import Path
 
 import math
-from .glyphs import airplane_points, heading_angle, rotor_centers
+from .glyphs import aircraft_geometry, role_badge, ROLE_LEGEND
 from had_env.geometry import get_area_point
 
 
@@ -58,6 +58,8 @@ class DisplayPlayer:
         self.interaction_height_range = [int(0.05 * ScreenHeight), int(0.95 * ScreenHeight)]
         self.running = True
         self.game_over_font = pygame.font.Font(None, 72)
+        self.label_font = pygame.font.Font(None, 17)
+        self.badge_font = pygame.font.Font(None, 15)
         self.transparent_layer = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
         resource_dir = Path(__file__).resolve().parents[1] / 'resources'
         self.target_image = pygame.image.load(str(resource_dir / 'target.png'))
@@ -67,7 +69,7 @@ class DisplayPlayer:
             -1: self.game_over_font.render("Blue Wins", True, (0, 0, 255)),
         }
 
-    def update(self, agent_info_list, game_result):
+    def update(self, agent_info_list, game_result, metadata=None):
         if not self.running:
             return
 
@@ -75,10 +77,10 @@ class DisplayPlayer:
         if not self.running:
             return
 
-        self.draw(agent_info_list, game_result)
+        self.draw(agent_info_list, game_result, metadata)
         pygame.display.flip()
 
-    def draw(self, agent_info_list, game_result):
+    def draw(self, agent_info_list, game_result, metadata=None):
         """Draw one frame without processing events or flipping a display.
 
         This is the reusable rendering primitive for both the pygame window
@@ -98,8 +100,42 @@ class DisplayPlayer:
         self.screen.blit(transparent_layer, (0, 0))
 
         self.draw_borders()
+        self.draw_labels(metadata)
 
         self.display_result(game_result)
+
+    def project_position(self, position, projection="xy"):
+        """Normalized world position to the native XY/XZ panels (y/z up)."""
+        x, y, z = position
+        horizontal = get_area_point(self.interaction_length_range, x)
+        if projection == "xy":
+            vertical = get_area_point(self.interaction_width_range, 1-y) + self.interaction_height_range[0]
+        else:
+            vertical = self.interaction_width_range[1] + get_area_point(self.interaction_height_range, 1-z)
+        return horizontal, vertical
+
+    def draw_labels(self, metadata=None):
+        ink = (36, 52, 71)
+        def text(message, location):
+            self.screen.blit(self.label_font.render(message, True, ink), location)
+        text(ROLE_LEGEND, (40, self.screen.get_height()-18))
+        if metadata is None:
+            text("XY / m", (44, 52))
+            text("XZ / m  (z up)", (44, self.screen.get_height()-38))
+            return
+        bounds = metadata["world_bounds"]
+        counts = metadata["live_counts"]
+        text(f"{metadata['task_mode'].upper()}  |  step {metadata['step']}  |  live Red {counts['red']} / Blue {counts['blue']}"
+             f"  |  damage {metadata['step_target_damage']:.3f} step / {metadata['target_damage']:.3f} total", (40, 8))
+        assets = "  ".join(f"T{row['id']} HP {row['health']:.2f}/{row['max_health']:.2f}" for row in metadata["targets"])
+        # Keep dense target sets inside the fixed-size frame.
+        limit = self.screen.get_width()-80
+        while self.label_font.size(assets)[0] > limit and len(assets) > 4:
+            assets = assets[:-5] + "..."
+        text(assets, (40, 28))
+        text(f"XY  |  x {bounds[0][0]:g}..{bounds[0][1]:g} / y {bounds[1][0]:g}..{bounds[1][1]:g} m", (44, 52))
+        text(f"XZ  |  x {bounds[0][0]:g}..{bounds[0][1]:g} / z {bounds[2][0]:g}..{bounds[2][1]:g} m  (z up)",
+             (44, self.screen.get_height()-38))
 
     def handle_events(self):
         """Handle user input events like quitting."""
@@ -141,14 +177,10 @@ class DisplayPlayer:
             agent_px, agent_py, agent_pz = target_info["position"]
             draw_target = self.target_image if target_info["alive"] else self.dead_target_image
 
-            center = [get_area_point(self.interaction_length_range, agent_px),
-                      get_area_point(self.interaction_width_range, 1 - agent_py) + get_area_point(
-                          self.interaction_height_range, 0)]
+            center = self.project_position(target_info["position"])
             # resized_image = pygame.transform.scale(image, (new_width, new_height))
             surface.blit(draw_target, center)
-            center_z = [get_area_point(self.interaction_length_range, agent_px),
-                        self.interaction_width_range[1] + get_area_point(
-                            self.interaction_height_range, agent_pz)]
+            center_z = self.project_position(target_info["position"], "xz")
             pygame.draw.circle(surface, RedColor, center_z, int(size/1.5))
 
     def draw_agents(self, surface, agents_info_n, color, size=12):
@@ -158,27 +190,41 @@ class DisplayPlayer:
             agent_vx, agent_vy, agent_vz = agent_info["velocity"]
             draw_agent_color = draw_color if agent_info["alive"] else DeadAgentColor
 
-            center = [get_area_point(self.interaction_length_range, agent_px),
-                      get_area_point(self.interaction_width_range, 1 - agent_py) + get_area_point(self.interaction_height_range, 0)]
+            center = self.project_position(agent_info["position"])
             angle = - math.atan2(agent_vy, agent_vx)
 
-            center_z = [get_area_point(self.interaction_length_range, agent_px),
-                        self.interaction_width_range[1] + get_area_point(self.interaction_height_range, agent_pz)]
+            center_z = self.project_position(agent_info["position"], "xz")
             angle_z = np.pi / 2 if agent_vz < 0 else - np.pi / 2
 
             model = agent_info.get("env_agent_type", "particle")
             if model in ("UAV_fixedwing", "UAV_quadrotor"):
-                for projection, location, glyph_size in (("xy", center, size), ("xz", center_z, size / 2)):
-                    orientation = heading_angle(agent_info, projection)
-                    if model == "UAV_fixedwing":
-                        pygame.draw.polygon(surface, draw_agent_color, airplane_points(orientation, glyph_size, location))
+                for projection, location, glyph_size in (("xy", center, max(12, size)), ("xz", center_z, max(10, size / 2))):
+                    geometry = aircraft_geometry(agent_info, projection, glyph_size, location)
+                    for polygon in geometry["polygons"]:
+                        pygame.draw.polygon(surface, draw_agent_color, polygon)
+                    for start, end in geometry["lines"]:
+                        pygame.draw.line(surface, draw_agent_color, start, end, 2)
+                    for point, radius in geometry["circles"]:
+                        pygame.draw.circle(surface, draw_agent_color, point, max(2, round(radius)), 1)
+                    if geometry["nose"] is not None:
+                        pygame.draw.line(surface, draw_agent_color, location, geometry["nose"], 2)
+                        pygame.draw.circle(surface, (255, 255, 255), geometry["nose"], 2)
+                    elif geometry["toward"]:
+                        pygame.draw.circle(surface, draw_agent_color, location, 2)
                     else:
-                        rotors = rotor_centers(orientation, glyph_size, location)
-                        pygame.draw.line(surface, draw_agent_color, rotors[0], rotors[2], 2)
-                        pygame.draw.line(surface, draw_agent_color, rotors[1], rotors[3], 2)
-                        for rotor in rotors:
-                            pygame.draw.circle(surface, draw_agent_color, rotor, max(2, int(glyph_size*.3)), 1)
-                        pygame.draw.circle(surface, draw_agent_color, location, max(2, int(glyph_size*.2)))
+                        x, y = location
+                        pygame.draw.line(surface, draw_agent_color, (x-3, y-3), (x+3, y+3), 2)
+                        pygame.draw.line(surface, draw_agent_color, (x-3, y+3), (x+3, y-3), 2)
+                    x, y = location
+                    pygame.draw.rect(surface, draw_agent_color, (x+16, y-18, 12, 12), border_radius=2)
+                    surface.blit(self.badge_font.render(role_badge(agent_info), True, (255, 255, 255)), (x+19, y-18))
+                    for key, label, offset in (("bank", "R", -18), ("pitch", "P", 6)):
+                        surface.blit(self.badge_font.render(label, True, draw_agent_color), (x+offset, y+16))
+                        points = geometry["indicators"].get(key)
+                        if points:
+                            pygame.draw.line(surface, draw_agent_color, *points, 1)
+                        else:
+                            surface.blit(self.badge_font.render("?", True, draw_agent_color), (x+offset+9, y+16))
             elif agent_info["type"] == "Attack":
                 pygame.draw.circle(surface, draw_agent_color, center, int(size))
                 pygame.draw.circle(surface, draw_agent_color, center_z, int(size / 2))

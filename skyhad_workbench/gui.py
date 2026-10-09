@@ -246,7 +246,7 @@ class WorkbenchWindow(QMainWindow):
         open_folder = QPushButton("载入记录目录")
         open_folder.clicked.connect(self._open_directory)
         layout.addWidget(open_folder)
-        legend = QLabel("▲ Attack   ● Scout   ◆ Disturb\n■ Target   红 / 蓝为阵营\n金色时间标记：决策   红色：事件")
+        legend = QLabel("A Attack   S Scout   D Disturb\nTarget   红 Red / 蓝 Blue 为阵营\n金色时间标记：决策   红色：事件")
         legend.setStyleSheet("font-size: 11px; color: #91a4c0; padding: 7px 0")
         legend.setWordWrap(True)
         layout.addWidget(legend)
