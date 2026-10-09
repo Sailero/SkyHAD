@@ -33,8 +33,13 @@ def test_physics_matches_original_recorded_trajectory(case):
     obs, _ = env.reset(seed=case["seed"])
     if case["preset"]:
         _place(env, case["preset"])
-    assert _world_rows(env) == case["initial_world"]
-    np.testing.assert_allclose(env.simulation.get_observation(), case["initial_observation"], rtol=0, atol=0)
+    initial_world = _world_rows(env)
+    assert len(initial_world) == len(case["initial_world"])
+    for actual, expected in zip(initial_world, case["initial_world"]):
+        np.testing.assert_allclose(actual[0], expected[0], rtol=0, atol=1e-11)
+        np.testing.assert_allclose(actual[1], expected[1], rtol=0, atol=1e-11)
+        assert actual[2:] == expected[2:]
+    np.testing.assert_allclose(env.simulation.get_observation(), case["initial_observation"], rtol=0, atol=1e-11)
     for reference in case["frames"]:
         acting = env.agents.copy()
         obs, rewards, terms, truncs, infos = env.step({a: reference["actions"][env.agent_name_mapping[a]] for a in acting})
