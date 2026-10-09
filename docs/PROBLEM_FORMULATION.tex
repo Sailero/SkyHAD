@@ -17,13 +17,13 @@
 \newcommand{\norm}[1]{\lVert#1\rVert}
 \newcommand{\sat}[2]{\operatorname{sat}_{#2}(#1)}
 \newcommand{\subhead}[1]{\subsection{#1}}
-\newcommand{\ThemePage}[3]{\clearpage\section{Theme #1 / #2}\label{theme:#1:\ThemePart}\noindent #3.\par}
+\newcommand{\ThemePage}[3]{\clearpage\section{Theme #1 / #2}\label{theme:#1:\ThemePart}\noindent #3\par}
 \newcommand{\ThemePart}{physics}
 \newcommand{\CommonTitle}[2]{\clearpage\section{#1}}
 \newcommand{\PageRange}[1]{\pageref{theme:#1:physics}--\pageref{theme:#1:game}}
-\newcommand{\InstancePhysics}[1]{\subhead{Physical state for this interface}#1 The complete state, health, role, side and replay records follow page~\pageref{common:transition}.}
-\newcommand{\CommonRigid}{\subhead{Shared rigid-body transition}Use Newton--Euler~\eqref{eq:newton-euler} and RK4~\eqref{eq:rk4} on page~\pageref{common:transition}, with the wrench and controller specified here. ENU/FLU axes and normalized scalar-first body-to-world quaternions apply.}
-\newcommand{\CommonIntegration}{\subhead{Numerical and boundary rules}Use the synchronized 100-substep RK4 map~\eqref{eq:rk4} and clipped-path boundary rule on page~\pageref{common:transition}. Hold the external command for 1 s; stage feedback is recomputed only for intent interfaces. Direct actuators remain constant.}
+\newcommand{\InstancePhysics}[1]{\subhead{Physical model and controlled transition}#1 The complete state~\eqref{eq:fullstate} includes this vehicle state, all other entities, health, roles, side, the clock, task variables and relevant memory.}
+\newcommand{\CommonRigid}{The controlled motion follows Newton--Euler~\eqref{eq:newton-euler} and RK4~\eqref{eq:rk4}, with the wrench and action-to-control map specified below. ENU/FLU axes and normalized scalar-first body-to-world quaternions apply.}
+\newcommand{\CommonIntegration}{This action-to-wrench map closes the synchronized 100-substep RK4 transition~\eqref{eq:rk4}. The external command is held for 1 s; intent feedback is recomputed at each stage, whereas direct actuators remain constant. The boundary rule of Section~\ref{common:transition} clips predicted paths and endpoint positions, and removes outward endpoint velocity.}
 
 \newcommand{\ScaleBlock}[5]{%
 \subhead{Episode geometry and initial law}
@@ -43,12 +43,12 @@ Each living agent chooses either $a_i\in[-1,1]^3$ or an index into
 \end{equation}
 giving 27 discrete primitives, zero first. The physical intent is $\alpha_i=#1a_i$ m/s$^2$. Continuous inputs have component bounds, so diagonal intents can have norm $\sqrt3\,#1$; discrete nonzero intents have norm $#1$. #1 is a control scale, not a clamp on actual rigid-body acceleration.
 }
-% IEEE natural columns; each theme starts a physics page and a game page.
+% IEEE natural columns; one numbered section spans each two-page theme.
 \newcommand{\ParticlePage}[3]{%
-\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Particle / #2 / #3}{Physical state, navigation action and discrete transition}
+\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Particle / #2 / #3}{For the #3 defense task, the particle navigation map determines the interception geometry. We first specify that map, its action interface and reset law, then formulate the defender information and payoff under a frozen Blue policy.}
 
 \InstancePhysics{$x_i=(p_i,v_i)\in\mathcal W\times\R^3$ is a six-value kinematic state; no quaternion, inertia, wing or rotor is attached to a particle.}
-\subhead{Implemented kinematic map}
+\subhead{Kinematic navigation map}
 For a living, noncolliding particle, $\Delta=1$ s,
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}
  p_i^*&=p_i+\Delta v_i,&p_i'&=\Pi_{\mathcal W}(p_i^*),\\
@@ -63,7 +63,6 @@ For $\norm w<10^{-3}$, use $m v/\norm v$ when $\norm v\ge10^{-3}$ and $m e_1$ ot
 The final 3D turn map limits the angle between old and candidate velocities to $\theta_{\max}=\pi$ per step, so the default map is identity. For a smaller cap, rotate the old heading toward the candidate about $v_i\times\widetilde v_i$, preserving candidate speed. A deterministic orthogonal axis resolves the antiparallel case; near-zero products $\norm v_i\norm{\widetilde v_i}\le10^{-3}$ have angle zero.
 
 Position uses old velocity, with no $\tfrac12\alpha\Delta^2$ term. Boundary projection can reduce the final speed below 35 m/s. Agents killed by collision do not move; agents killed by combat complete this step's motion, and their velocity is zeroed on the next inactive update.
-\subhead{Interpretation}
 This is a kinematic benchmark. Its action controls future velocity and thus subsequent interception geometry, rather than instantaneous translation. Flight decisions and automatic functional decisions are distinct.
 
 
@@ -82,10 +81,10 @@ Each agent selects $a_i=p_i^{\rm des}\in\mathcal W$ in metres. The stateless out
 The command is an absolute point, not a displacement or teleport. The velocity reference can approach zero, but the particle speed map enforces its nonzero free-flight minimum; this interface does not promise arrival with rest. There are three continuous action coordinates and no position-action quantization.
 \fi
 \ScaleBlock{1}{Random velocity has a Gaussian unit direction and speed $\norm{(u_1,u_2,u_3)}/\sqrt3$, where $u_a\sim U(35,120)$. Initial positions and velocities are generated by the environment-local RNG.}{20}{300}{600}
+This reset law and navigation map are common to Survival and Damage; their distinction enters through asset health, completion and the defender reward below. The information structure therefore reflects the chosen action interface rather than the task label.
 \subhead{2D compatibility}
 Only particle themes support $d=2$. The three coordinate slots remain, $p_z=100\lambda$, $v_z=\alpha_z=0$. Acceleration uses a 2-vector or nine planar primitives; position remains a 3-vector with prescribed altitude. Radii become $(200,400)\lambda$. Planar resets reject too-close openings, and the heading cap is applied on the circle. These are compatibility settings of this theme, not additional themes.
-\subhead{Task dependence}
-Navigation and observations are identical between Survival and Damage. Asset health evolution, completion, and defender reward differ as specified on the next page. Neither task changes the particle into a rigid-body vehicle.
+
 
 }
 \newcommand{\FWForces}{%
@@ -135,7 +134,7 @@ Q_p&=\rho D_p(.005230,.004970,-.01664)z.
 Reference trim $(x^*(V_d),u^*(V_d))$ solves all six equations $\dot v=0$, $\dot\omega=0$, including propeller reaction torque. Unknowns are pitch, heading, elevator, aileron, rudder and throttle, at velocity $(V_d,0,0)$. The reset uses the 30 m/s level trim rotated to the initial heading. Mass/inertia are not scaled with the scene~\cite{aerosonde}.
 }
 \newcommand{\FWGuidance}[1]{%
-\subhead{Implemented reference controller}
+\subhead{Reference tracking and actuator control}
 #1 Define bank $\phi=\operatorname{atan2}(R_{32},R_{33})$, nose-up pitch $\theta=\arcsin R_{31}$, heading $\psi=\operatorname{atan2}(R_{21},R_{11})$. Actual course is $\chi=\operatorname{atan2}(v_y,v_x)$, or $\psi$ when horizontal speed is tiny; path $\gamma_f=\operatorname{atan2}(v_z,\norm{v_{xy}})$ and $V_a=\norm v$.
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}
  V_d&=\clip(V_d,18,30),\\\gamma_d&=\clip(\gamma_d,-15^\circ,15^\circ),\\
@@ -151,7 +150,7 @@ Reference trim $(x^*(V_d),u^*(V_d))$ solves all six equations $\dot v=0$, $\dot\
 All angles use radians. The scheduled trim heading $\psi^*$ is the lateral reference. Divide surfaces by $25^\circ$, map throttle to $2\tau-1$ and clip the four outputs to $[-1,1]$. These project gains/bounds do not clamp the physical flight envelope.
 }
 \newcommand{\FWPage}[3]{%
-\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Fixed wing / #2 / #3}{Rigid-body aerodynamic transition and navigation/actuator semantics}
+\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Fixed wing / #2 / #3}{The #3 defense task couples aerodynamic motion to interception and asset protection. The following wrench and action-to-control map determine the physical transition; its resulting partial information and defender payoff complete the same formulation.}
 
 \InstancePhysics{$x_i=[p_i^T,v_i^T,q_i^T,\omega_i^T]^T\in\R^{13}$ with $\norm{q_i}=1$.}
 \CommonRigid
@@ -224,7 +223,7 @@ At a stage state, clip a held velocity reference to 20 m/s, then compute
  M_d&=-8.81e_R-2.54\omega+\omega\times J\omega,\\
  f_d&=F_d^TR e_3.
 \end{aligned}\end{equation}
-Fixed world-east heading avoids hidden yaw memory. The $6$ m/s$^2$ bound is below $g$, so $F_d$ and its heading construction are nonsingular. This uses attitude PD and gyro compensation, without the source paper's trajectory derivative or desired angular-rate feedforward.
+Fixed world-east heading avoids hidden yaw memory. The $6$ m/s$^2$ bound is below $g$, so $F_d$ and its heading construction are nonsingular. The attitude gains $8.81$ and $2.54$ are source-derived~\cite{lee}; this feedback uses attitude PD and gyro compensation, without the source paper's trajectory derivative or desired angular-rate feedforward.
 
 To preserve feasible collective thrust, set $\bar f=\clip(f_d,0,4f_{\max})/4$ and $d=A^{-1}(0,M_d)^T$. Define
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}
@@ -240,25 +239,18 @@ To preserve feasible collective thrust, set $\bar f=\clip(f_d,0,4f_{\max})/4$ an
 Empty minima are ignored. Uniform differential scaling sacrifices moment while retaining the clipped collective; independent rotor clipping is not assumed to preserve it.
 }
 \newcommand{\QuadPage}[3]{%
-\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Quadrotor / #2 / #3}{Rigid-body thrust dynamics, reference feedback and feasible actuation}
+\renewcommand{\ThemePart}{physics}\ThemePage{#1}{Quadrotor / #2 / #3}{For the #3 defense task, rotor thrust and attitude determine how navigation changes the interception geometry. We specify the controlled rigid-body transition and initial law before connecting this motion to the defender information and task objective.}
 
 \InstancePhysics{$x_i=[p_i^T,v_i^T,q_i^T,\omega_i^T]^T\in\R^{13}$ with $\norm{q_i}=1$.}
 \CommonRigid
 \QuadWrench
-\subhead{Episode geometry and reset law}
-Default $\lambda=.16$, $\mathcal W=[-400,400]^2\times[0,400]$ m, $d_c=3.2$ m, $(r_0,r_1)=(48,96)$ m and $r_f=r_0$ (configurable $0<r_f\le r_0$). Assets are independently uniform in $[-368,-304]\times[-192,192]\times[80,240]$ m or use a fixed layout. Red samples an area-uniform XY annulus $[128,352]$ m around a uniformly chosen asset, clipped to scene bounds; Blue is uniform over $[0,400]\times[-400,400]$ m. UAV altitude is uniform in $[32,240]$ m.
-
-Reset UAVs at $v=0$, $q=(1,0,0,0)$, $\omega=0$. Reject UAV openings within $\max(4.8,d_c+10^{-6})$ m of any previously placed entity; later collisions are allowed. Only 3D is supported.
-
-
 \ifnum\pdfstrcmp{#2}{Actuator}=0
 \subhead{Direct rotor-thrust action}
 Each living agent selects $a_i\in[0,1]^4$, ordered front, right, rear, left, and $u=a_i$ is held throughout the external step. The wrench map enters Newton-Euler dynamics directly, without automatic attitude or position stabilization. Zero thrust is free fall, not hover; $.4$ on every rotor is ideal level hover.
 \CommonIntegration
-\subhead{Decision and task interpretation}
-The agent must learn a rotor-level feedback policy from its local information. Identical rotor actions can generate different world accelerations because thrust follows the current body $+z$ axis. Attitude and angular velocity are therefore indispensable components of the physical state and are explicitly supplied in the actor's self block.
+The resulting control burden is rotor-level feedback from local information. Identical rotor actions can generate different world accelerations because thrust follows the current body $+z$ axis. Attitude and angular velocity are therefore indispensable components of the physical state and are explicitly supplied in the actor's self block.
 
-The default world is $[-400,400]^2\times[0,400]$ m. Protected assets have positive finite health in both tasks; only the Survival task decrements asset health. A saturated or destabilizing action is propagated by the rigid-body equations, rather than repaired by a reference controller. Low altitude does not itself cause a crash: scene boundaries project position and remove outward velocity.
+A saturated or destabilizing action is propagated by the rigid-body equations. Low altitude does not itself cause a crash: scene boundaries project position and remove outward velocity. Finite asset health follows the task-specific evolution defined below.
 \else
 \ifnum\pdfstrcmp{#2}{Acceleration}=0
 \AccelerationAction{6}
@@ -278,79 +270,63 @@ For $z=0$, define $\sat0L=0$. The position reference is held over the external s
 \CommonIntegration
 \fi
 
+\subhead{Episode geometry and reset law}
+Default $\lambda=.16$, $\mathcal W=[-400,400]^2\times[0,400]$ m, $d_c=3.2$ m, $(r_0,r_1)=(48,96)$ m and $r_f=r_0$ (configurable $0<r_f\le r_0$). Assets are independently uniform in $[-368,-304]\times[-192,192]\times[80,240]$ m or use a fixed layout. Red samples an area-uniform XY annulus $[128,352]$ m around a uniformly chosen asset, clipped to scene bounds; Blue is uniform over $[0,400]\times[-400,400]$ m. UAV altitude is uniform in $[32,240]$ m.
+
+Reset UAVs at $v=0$, $q=(1,0,0,0)$, $\omega=0$. Reject UAV openings within $\max(4.8,d_c+10^{-6})$ m of any previously placed entity; later collisions are allowed. Only 3D is supported.
+
 }
 
 \newcommand{\GamePage}[4]{%
-\renewcommand{\ThemePart}{game}\ThemePage{#1}{#2 / #3}{Defender task instance, information dimensions and learning contract}
-
-\subhead{Controlled process for this theme}
-The physical map on page~\pageref{theme:#1:physics}, combined with the shared event rules on page~\pageref{common:transition}, defines $F_C$. The configuration selects \textbf{#2} and \textbf{#3}; it leaves episode-fixed Attack, Scout and Disturb roles intact. Red controls navigation; each living Blue agent receives its own navigation action from the specified external Blue policy. Automatic firing is the same separate rule for both teams.
-
-\ifnum#1<5
-\subhead{Particle event and scale instance}
-Use the six-value kinematic state, $\lambda=1$, $d_c=20$ m and $(r_0,r_1)=(300,600)$ m. Actor normalization uses $V_{\max}=120$ m/s. Collision prediction uses old-velocity line segments, and position advances before the chosen acceleration affects future velocity. The 35--120 m/s speed normalization and turn map belong to this physical interface; clipping at a wall can reduce speed below 35 m/s.
-\ifnum#1<3
-The acceleration action has three continuous coordinates or 27 unit primitives. The actor lacks a self-state block, so it must infer its own motion from its available history when needed; relative entity rows alone do not supply absolute velocity or absolute position.
-\else
-The absolute-position action has three continuous coordinates in $\mathcal W$. The outer loop supplies a norm-limited acceleration; the six raw self values provide the position and velocity needed for this reference interface. A position intent does not override collision or minimum free-flight speed.
-\fi
-Only this model admits the planar compatibility setting on its physics page. All equations and dimensions here describe the native 3D instance.
-\else\ifnum#1<11
-\subhead{Fixed-wing event and scale instance}
-Use the constrained thirteen-value rigid state, $\lambda=.4$, $d_c=8$ m and $(r_0,r_1)=(120,240)$ m. Actor normalization uses $V_{\max}=30$ m/s. Collision prediction uses synchronized, clipped RK4 path segments. Aerodynamic force, motor/propeller reaction torque, trim and attitude all affect navigation; they are preserved on the physics page.
-\ifnum#1<7
-The acceleration action has three continuous coordinates or 27 unit primitives, scaled by 5 m/s$^2$. It creates the once-per-step held velocity reference; heading, path-angle and speed references then feed stage feedback. Reference bounds constrain the controller, rather than the actual flight envelope.
-\else\ifnum#1<9
-The actuator action has four continuous coordinates in $[-1,1]$, ordered elevator, aileron, rudder, throttle. It acts directly on the wrench for the whole step. Neither the trim schedule nor the navigation controller repairs destabilizing actions.
-\else
-The position action has three continuous coordinates in $\mathcal W$. Stage position determines heading and climb reference with 30 m/s speed demand. The same scheduled-trim controller flies toward and through the point; the vehicle cannot hover.
-\fi\fi
-Other agents' attitude and body rate are omitted from actor rows, even though those states determine their future motion. Self attitude/rate are retained in the raw own-state block.
-\else
-\subhead{Quadrotor event and scale instance}
-Use the constrained thirteen-value rigid state, $\lambda=.16$, $d_c=3.2$ m and $(r_0,r_1)=(48,96)$ m. Actor normalization uses $V_{\max}=20$ m/s. Collision prediction uses synchronized, clipped RK4 path segments; rotor thrust follows the current body $+z$ direction.
-\ifnum#1<13
-The acceleration action has three continuous coordinates or 27 unit primitives, scaled by 6 m/s$^2$. The held velocity reference is constructed once from pre-step velocity. Stage feedback maps it to feasible rotor commands and preserves clipped collective thrust by uniform moment scaling.
-\else\ifnum#1<15
-The direct actuator action has four continuous thrust fractions in $[0,1]$, ordered front, right, rear, left. The fractions are held for the full step. Zero action is free fall, while .4 on all rotors is ideal level hover; a local learned policy supplies stabilization.
-\else
-The position action has three continuous coordinates in $\mathcal W$. Stage feedback uses a 12 m/s norm-limited position-derived velocity reference, then the common geometric controller and feasible rotor allocation. Zero reference velocity near a point is allowed.
-\fi\fi
-Other UAV attitudes/rates are not in entity rows, while the actor's own quaternion/rates are exposed. No motor lag, rotor drag or hidden controller integral is introduced.
-\fi\fi
-\subhead{Transition and event checklist}
-First predict all living paths and resolve UAV collisions in fixed pair order. At step-start positions, compute automatic Attack fire and Disturb decisions from the common post-collision snapshot. Add all interaction losses before clipping health, then perform the controlled motion of collision survivors, including agents killed by combat. Update the selected task, increment the step, and pack successor observations. Inactive velocities are zeroed at the next update.
-
-The default firing radius is $r_f=r_0$; configuration can choose $0<r_f\le r_0$. Fire may affect multiple enemies. There is no invented visibility mask: every living entity has an actor row irrespective of role sectors or firing range.
-
-
-\subhead{Exact local and critic inputs}
-#4 Entity rows are the normalized eleven-value encoding on page~\pageref{common:information}, with fixed roster order, dead rows zero and no own-health entry in the self block.
+\clearpage\phantomsection\label{theme:#1:game}
+\subhead{Defender information}
+The navigation transition above determines both future interception opportunities and the motion encoded in each defender's observation. The local input is the deterministic encoding~\eqref{eq:observation}, with the following interface-specific self information. #4 Entity rows contain eleven normalized values in fixed roster order; dead rows are zero, and own health is absent from the self block.
 \ifnum#1<3
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\dim o_i=11(M-1),\qquad\dim g=11M.\end{equation}
+The acceleration actor has no self-state block. Relative entity rows alone do not supply its absolute position or velocity, so its policy must infer any needed own-motion information from local history.
 \else\ifnum#1<5
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\dim o_i=11(M-1)+6,\qquad\dim g=11M.\end{equation}
+The position actor's six raw self values supply the position and velocity required by its absolute-point interface. This information does not remove the minimum free-flight speed or alter the collision transition. The dimensions describe the native 3D particle; planar compatibility is confined to the setting stated above.
 \else
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}\dim o_i&=11(M-1)+13,\\\dim g&=11M+13N+3.\end{aligned}\end{equation}
+The raw self block exposes the defender's quaternion and body rate, which are needed to interpret body-frame actuation. Other UAV attitudes and rates remain absent from entity rows even though they affect subsequent rigid-body motion.
 \fi\fi
-The entity validity mask indicates living entries. Action participation is $\ell_{i,t}=\ind[h_{i,t}>0]$ before the transition. Role labels, policy memory and absolute time are not inferable merely from side flags. A critic receives the privileged packing only by an explicit CTDE choice; exact value conditioning additionally requires relevant task state and policy memory/history as on page~\pageref{common:learning}.
 
-\subhead{#3 reward and completion instance}
-\ifnum\pdfstrcmp{#3}{Survival}=0
-Apply the Survival rule on page~\pageref{common:information}: asset HP decreases by raw $L_k$, and target loss has priority over Blue Attack elimination.
-\begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}h_k'&=\max(0,h_k-L_k),&D_k'&=D_k+L_k,\\R_t&=10z(s'),&d_t^{\rm term}&=\ind[z(s')\ne0].\end{aligned}\end{equation}
-Blue receives $-R_t$. Red elimination alone does not end the world. A nonpositive-health actor retires after its lethal final transition, while the team return and successor value continue until global natural completion. Explicit optional reward weights replace this native scalar by the formulation on page~\pageref{common:learning}; they do not add a second terminal bonus.
+Every living entity appears irrespective of firing range or Attack, Scout and Disturb sectors. Entity validity identifies living rows; it differs from the pre-transition action participation mask $\ell_{i,t}=\ind[h_{i,t}>0]$. Side flags do not encode functional role, and the encoding omits policy memory and absolute time. Thus noiseless observation does not make the defender's local information Markov.
+
+The privileged feature $g$ follows~\eqref{eq:critic-packing}. Its availability is an explicit centralized-training choice; the complete transition state remains~\eqref{eq:fullstate}. In particular, exact value conditioning may require task state and policy history in addition to the packed features.
+\subhead{Frozen-opponent transition}
+With the physical and information maps fixed, the defender process is the Dec-POMDP~\eqref{eq:defender-dec-pomdp}. Its per-step map $F_C$ combines this section's controlled motion with the ordered collision and interaction rules of Section~\ref{common:transition}. The separately specified reset law $\rho_0$ supplies the initial distribution. Episode-fixed Attack, Scout and Disturb roles are retained. A specified frozen external $\pi_B$ supplies each living Blue agent's navigation action and updates any Blue memory. Automatic firing is a separate environment rule for both teams; it does not determine Blue navigation.
+
+\ifnum#1<5
+For the particle, collision prediction follows old-velocity line segments. Consequently, the selected acceleration changes subsequent velocity and interception geometry after the current position advance.
 \else
-Apply the Damage rule on page~\pageref{common:information}: finite asset HP stays at reset health; raw simultaneous damage is counted before clipping or overkill normalization.
-\begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}h_k'&=h_k^0,&D_k'&=D_k+L_k,\\R_t&=-\sum_kL_k,&d_t^{\rm term}&=\ind[\forall b\in\mathcal B_A:h_b'\le0].\end{aligned}\end{equation}
-Blue receives $-R_t$. Every team slot receives the full shared reward, including dead Red slots and later damage after Red extinction; summing duplicate teammate rewards changes the objective. Dead slots keep zero observations and ignored actions until global completion/truncation. At $\gamma=1$, the Red return is $-\sum_kD_k$, with no Survival terminal bonus or optional Survival weights.
+For this rigid model, collision prediction uses synchronized, clipped RK4 path segments generated by the same action-to-wrench map as the physical transition.
 \fi
-\subhead{Defender learning instance}
-Freeze a specified external $\pi_B$ and integrate its navigation actions and memory into $T^{\pi_B}$ on page~\pageref{common:information}. Choose decentralized Red actors $\pi_i(a_i\mid\tau_i)$ using local histories and the above interface. Then optimize the continuing objective on page~\pageref{common:learning} with this task's $R_t$ and reset law from page~\pageref{theme:#1:physics}. Jointly adapting both teams instead defines the corresponding POSG.
+Collision victims do not move; combat victims complete the current motion, with inactive velocity zeroed at the next update. Losses use the common post-collision, pre-motion snapshot. The firing threshold is $r_f=r_0$ by default, with configurable $0<r_f\le r_0$, and a source may damage several enemies.
+\subhead{#3 payoff and natural completion}
+This transition produces raw asset loss $L_k$ and successor UAV health, from which the #3 task defines the shared defender reward and world completion.
+\ifnum\pdfstrcmp{#3}{Survival}=0
+The Survival outcome $z(s')$ is~\eqref{eq:survival-outcome}: asset loss at $h_k'<10^{-3}$ has priority over elimination of all Blue Attack agents at $h_b'<10^{-3}$.
+\begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}h_k'&=\max(0,h_k-L_k),&D_k'&=D_k+L_k,\\R_t&=10z(s'),&d_t^{\rm term}&=\ind[z(s')\ne0].\end{aligned}\end{equation}
+Blue receives $-R_t$. Red elimination alone does not complete the world. An actor with nonpositive health retires after its lethal final transition, while the team return continues until natural world completion. The optional weights in Section~\ref{common:learning} replace this native scalar; they do not add a second terminal bonus.
+\else
+In Damage, assets retain finite reset health. Raw simultaneous contributions are accumulated before health clipping, including overkill, without team-size, asset-count or HP normalization.
+\begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}h_k'&=h_k^0,&D_k'&=D_k+L_k,\\R_t&=-\sum_kL_k,&d_t^{\rm term}&=\ind[\forall b\in\mathcal B_A:h_b'\le0].\end{aligned}\end{equation}
+Blue receives $-R_t$. Each slot receives the full team reward, including dead Red slots and later damage after Red extinction; duplicating it across teammates does not create additional team return. Dead slots have zero observations and ignored actions until global completion or truncation. No Survival terminal bonus or optional Survival weights apply.
+\fi
+\subhead{Decentralized defender objective}
+A Red policy factors into actors $\pi_i(a_i\mid\tau_i)$ using only their local histories and the action interface defined above. The shared objective of Section~\ref{common:learning} averages over this reset law, the frozen-opponent transition and Red policy decisions.
+\ifnum\pdfstrcmp{#3}{Survival}=0
+For Survival, Red maximizes the discounted terminal asset-protection payoff; at $\gamma=1$, successful defense contributes $+10$ and loss of any asset contributes $-10$. Interception is valuable through this team outcome rather than an additional native flight reward.
+\else
+For Damage, Red maximizes negative discounted raw asset loss; at $\gamma=1$, its return is $-\sum_kD_k$. Navigation and cooperation are therefore evaluated by the accumulated damage they prevent, including any continuation after Red extinction.
+\fi
+The frozen Blue policy defines the opposing process throughout this optimization. Joint adaptation of both teams instead gives the corresponding partially observable stochastic game. Optional grouping remains the separate acceleration-execution extension in Section~\ref{common:learning}.
+\subhead{Value conditioning and sampled horizons}
+Exact centralized targets use $\xi_t$, which augments $g(s_t)$ with relevant task state and policy history, including Red recurrent memory and frozen Blue memory. Target actions use the corresponding successor policy memories. The shared value construction specializes here to
 \begin{equation}\stepcounter{eqanchor}\label{eq:auto-\arabic{eqanchor}}\begin{aligned}b_t&=1-d_t^{\rm term},\\y_t&=R_t+\gamma b_tQ^-(\xi_{t+1},a_R').\end{aligned}\end{equation}
-The caller's horizon $H$ truncates a sample, including after individual death; it does not award native victory. Retain successor value at truncation. Natural completion has priority when both occur. Target actions must use the successor policy memories; $\xi$ includes relevant Red recurrent memory and frozen Blue memory. Actor loss uses pre-step participation, so a lethal action remains trainable.
-
-This is a mathematical task and information contract. It specifies neither optimizer nor a reported training result. Grouping on page~\pageref{common:learning} is an optional acceleration execution extension, rather than another native theme.
+The horizon $H$ truncates a collected sample without awarding native victory; successor value is retained at truncation and after individual death. Natural completion takes priority if it coincides with $H$. Entity validity, actor retirement and the global bootstrap are consequently distinct. The action loss uses pre-step participation, so a final lethal action remains trainable. This formulation specifies the defender objective and its value semantics without prescribing an optimizer or claiming a training result.
 
 }
 \begin{document}
@@ -394,11 +370,11 @@ The particle supports acceleration and absolute-position actions. Each rigid mod
 \subhead{Task distinction}
 Survival uses default terminal Red payoff $\pm10$ with asset-loss priority. Damage accumulates raw asset losses while finite asset health remains unchanged. Red extinction alone is not a native global terminal event. The sample horizon $H$ limits collected trajectories; it does not replace the continuing objective by a finite-horizon game.
 \subhead{Scope and reading order}
-Pages~\pageref{common:transition}--\pageref{common:learning} define shared dynamics, ordered events, information, tasks and learning. Each theme then provides one physical/action page and one game/learning page. Only particle themes admit planar compatibility; the native formulations are 3D. The document has \pageref{document:end} pages.
+Pages~\pageref{common:transition}--\pageref{common:learning} define shared dynamics, ordered events, information, tasks and learning. Each of the sixteen themes is one continuous two-page section: its controlled physical model and reset lead to defender information, a frozen-opponent process, task payoff and policy optimization. Only particle themes admit planar compatibility; the native formulations are 3D. The document has \pageref{document:end} pages.
 
 The implementation grounds this specification: particle position advances with old velocity; all living entities appear in native actor rows; automatic firing is separate from external Blue navigation; and fixing Blue is an explicit experiment choice. Physical fidelity and action abstraction are experimental choices, so the control burden differs across interfaces.
 \subhead{Units and model assumptions}
-Distances are metres, speeds m/s, rates rad/s and time seconds. $\lambda$ scales scene geometry and role radii, never aircraft mass/inertia. $\sat z L$ limits Euclidean norm; $\clip$ limits components/scalars. Each physics page supplies its own $\rho_0$, physical parameters, controller and action interface.
+Distances are metres, speeds m/s, rates rad/s and time seconds. $\lambda$ scales scene geometry and role radii, never aircraft mass/inertia. $\sat z L$ limits Euclidean norm; $\clip$ limits components/scalars. Each theme supplies its own $\rho_0$, physical parameters, controller and action interface.
 
 \subhead{Implementation correspondence and assumptions}
 The current flat implementation grounds this specification: \texttt{config.py} fixes scales and limits; \texttt{initialization.py} defines reset sampling; \texttt{dynamics/} defines particle/rigid maps, controllers and physical constants; \texttt{world.py} and \texttt{simulation.py} resolve events and motion; \texttt{observations.py} packs information; \texttt{tasks.py} defines rewards and completion; \texttt{grouping/} defines the optional extension. \texttt{docs/MODELING.md} records the same modeling assumptions.
@@ -513,7 +489,7 @@ For specified frozen external navigation policy $\pi_B$, including its memory tr
 \mathcal M_R=\big(&\mathcal R,\mathcal S,\{\mathcal A_i\},T^{\pi_B},\{\mathcal O_i\},Z,R,\gamma,\rho_0,H\big),\\
 T^{\pi_B}(s'\mid s,a_R)&=\int\delta_{F_C(s,a_R,a_B)}(s')\pi_B(da_B\mid o_B,\zeta_t).
 \end{aligned}\end{equation}
-$F_C$ includes the ordered events, model-specific controlled motion and any memory update. Native execution accepts both teams' navigation actions. Automatic fire is an environment rule and does not supply Blue navigation. A rule-based or learned frozen Blue policy is an explicit experiment choice; with both teams learning the system is a partially observable stochastic game (POSG). The reset law $\rho_0$ is defined by the model physics page.
+$F_C$ includes the ordered events, model-specific controlled motion and any memory update. Native execution accepts both teams' navigation actions. Automatic fire is an environment rule and does not supply Blue navigation. A rule-based or learned frozen Blue policy is an explicit experiment choice; with both teams learning the system is a partially observable stochastic game (POSG). The reset law $\rho_0$ is specified with the physical model in each theme.
 
 \subhead{Configuration and replay state}
 Configuration $C$ fixes roster, bounds, controls and task. $\zeta_t$ contains persistent assignments and opponent memory, if used. Reactive controllers have no hidden integrators. Last command, functional bits, pre-step positions and step damage are overwritten transition records; retain them for exact reward/event replay. RNG state is required for exact replay, not actor input.
@@ -565,7 +541,7 @@ Current grouping Damage returns the \emph{undiscounted} sum, directly matching $
 Built-in fixed Blue opponents are reactive, balanced and concentrated with a rush executor. Balanced uses target quotas; concentrated selects minimum mean-travel target. Reactive target probability is proportional to $e^{-2\,\mathrm{coverage}-.25\,\mathrm{travel}}$, with coverage $\sum_{i\in\mathcal R:h_i>0}h_i e^{-d_{ik}/(850\lambda)}$ and travel equal to mean Blue distance divided by $5000\lambda$. Native seedless resets advance the local RNG; grouping seedless reset reproduces its saved seeded initialization.
 
 \begin{table}[!t]
-\caption{Eight native model--action combinations: theme IDs and generated physics--game page ranges.}
+\caption{Eight native model--action combinations: theme IDs and generated ranges of the sixteen continuous two-page sections.}
 \label{tab:themes}\centering
 {\small\setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}llcc@{}}\toprule
