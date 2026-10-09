@@ -46,11 +46,16 @@ print(json.dumps([had_env.__file__, skyhad_workbench.__file__,
     assert core_version == tool_version == had_env.__version__
 
 
-def test_module_cli_prints_all_commands():
-    result = subprocess.run([sys.executable, '-B', '-m', 'skyhad_workbench', '--help'],
-                            cwd=ROOT, capture_output=True, text=True, timeout=30)
+@pytest.mark.parametrize('command', [None, 'record', 'live', 'view', 'export', 'branch', 'evaluate', 'inspect'])
+def test_module_cli_prints_help_on_cp1252(command):
+    arguments = [] if command is None else [command]
+    result = subprocess.run([sys.executable, '-B', '-m', 'skyhad_workbench', *arguments, '--help'],
+                            cwd=ROOT, env=dict(os.environ, PYTHONIOENCODING='cp1252:strict'),
+                            capture_output=True, text=True, encoding='cp1252', timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert all(command in result.stdout for command in ('record', 'view', 'branch', 'export', 'evaluate'))
+    assert '--help' in result.stdout
+    if command is None:
+        assert all(name in result.stdout for name in ('record', 'view', 'branch', 'export', 'evaluate'))
 
 
 def test_identity_follows_installed_packages_outside_working_directory(tmp_path, monkeypatch):

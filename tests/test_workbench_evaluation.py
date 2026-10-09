@@ -75,6 +75,68 @@ def test_evaluation_target_health_matches_runtime_config_and_explicit_precedence
     EvaluationPlan((train,), (), (explicit_override,))
 
 
+@pytest.mark.parametrize("config, explicit", [
+    (None, {"horizon_policy": "red_win"}),
+    ({"horizon_policy": "draw"}, {"horizon_policy": "red_win"}),
+    (None, {"plane_altitude": 100.}),
+    ({"scene_scale": .5}, {"plane_altitude": 50.}),
+])
+def test_equivalent_horizon_and_altitude_signatures_match_real_transitions(config, explicit):
+    from had_env.grouping.actions import rule_grouping
+    from skyhad_workbench.evaluation import scenario_signature
+    from skyhad_workbench.session import SimulationSession
+    omitted = ScenarioSpec(protocol_id=CUSTOM_PROTOCOL, red_count=2, blue_count=1,
+                           max_steps=2, command_interval=1, env_config=config)
+    written = replace(omitted, **explicit, scenario_id="")
+    with SimulationSession(omitted) as baseline, SimulationSession(written) as other:
+        assert baseline.env.horizon_policy == other.env.horizon_policy == "red_win"
+        assert baseline.env.plane_altitude == other.env.plane_altitude
+        assert baseline.env.effective_config == other.env.effective_config
+        assert baseline.state.to_dict() == other.state.to_dict()
+        action = rule_grouping(baseline.state)
+        expected, actual = baseline.step(action), other.step(action)
+        assert actual.state.to_dict() == expected.state.to_dict()
+        assert actual.info == expected.info
+        assert baseline.episode.frames[-1]["entities"] == other.episode.frames[-1]["entities"]
+    assert scenario_signature(omitted) == scenario_signature(written)
+
+
+@pytest.mark.parametrize("explicit", [{"horizon_policy": "red_win"}, {"plane_altitude": 100.}])
+@pytest.mark.parametrize("distribution", ["id", "ood"])
+def test_equivalent_settings_cannot_reuse_training_openings(explicit, distribution):
+    train = ScenarioSpec(protocol_id=CUSTOM_PROTOCOL, split="train")
+    reused = replace(train, **explicit, split="test", distribution=distribution, scenario_id="")
+    with pytest.raises(ValueError, match="exact opening"):
+        EvaluationPlan((train,), (), (reused,))
+
+
+@pytest.mark.parametrize("explicit", [{"horizon_policy": "red_win"}, {"plane_altitude": 100.}])
+def test_equivalent_settings_require_id_for_new_openings(explicit):
+    train = ScenarioSpec(protocol_id=CUSTOM_PROTOCOL, split="train")
+    held_out = replace(train, **explicit, split="test", opening_seed=91, opponent_seed=92, scenario_id="")
+    with pytest.raises(ValueError, match="OOD must hold out"):
+        EvaluationPlan((train,), (), (replace(held_out, distribution="ood", scenario_id=""),))
+    EvaluationPlan((train,), (), (held_out,))
+
+
+@pytest.mark.parametrize("changes", [{"horizon_policy": "draw"}, {"horizon_policy": "blue_win"},
+                                    {"plane_altitude": 200.}])
+def test_different_effective_horizon_and_altitude_require_ood(changes):
+    from skyhad_workbench.evaluation import scenario_signature
+    from skyhad_workbench.session import SimulationSession
+    train = ScenarioSpec(protocol_id=CUSTOM_PROTOCOL, split="train", spatial_dim=2,
+                         red_count=2, blue_count=1, max_steps=1, command_interval=1)
+    held_out = replace(train, **changes, split="test", opening_seed=91, opponent_seed=92, scenario_id="")
+    with SimulationSession(held_out, record=False) as session:
+        assert session.env.horizon_policy == changes.get("horizon_policy", "red_win")
+        assert session.env.plane_altitude == changes.get("plane_altitude", 100.)
+        assert session.step().done
+    assert scenario_signature(held_out) != scenario_signature(train)
+    with pytest.raises(ValueError, match="ID must match"):
+        EvaluationPlan((train,), (), (held_out,))
+    EvaluationPlan((train,), (), (replace(held_out, distribution="ood", scenario_id=""),))
+
+
 def test_cross_seed_means_are_equal_weighted_and_missing_pairs_are_explicit():
     def row(method, seed, scenario, win):
         return dict(method_id=method, training_seed=seed, scenario_id=scenario,

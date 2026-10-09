@@ -72,6 +72,8 @@ Grouping assigns surviving defenders to assets or reserve; its lower executor pr
 
 ## Optional research workbench
 
+The Qt viewer needs the system EGL runtime on Linux; on Ubuntu, install `libegl1` with the system package manager.
+
 ```bash
 python -m pip install -e ".[viewer]"
 skyhad-workbench live --agent-type UAV_fixedwing --policy rule
@@ -129,6 +131,6 @@ Reading the core does not require the optional grouping/workbench code. For tool
 
 [MODELING.md](docs/MODELING.md) introduces the two tasks and defender Dec-POMDP. The [36-page continuous IEEE formulation](docs/PROBLEM_FORMULATION.pdf) has shared material and two-page sections for all 16 themes; its [LaTeX source](docs/PROBLEM_FORMULATION.tex) remains editable. It distinguishes the full mathematical Markov state from the packed critic features returned by `state()`. [VALIDATION.md](docs/VALIDATION.md) records release checks and historical checkpoints.
 
-The current unified release line is **v4.1.0** (this candidate: **v4.1.0rc1**). The distribution remains `had-env`; imports remain `had_env` and `make_env`. **v4.0.2** refined the continuous paper-style formulation while preserving **v4.0.0** environment behavior. The original complete **v3.0.0** release, **baseline-v4-20261008**, and stage tags remain recovery points. The historical [SkyHAD-Workbench v1.0.0 repository](https://github.com/Sailero/SkyHAD-Workbench) was pinned to SkyHAD v3.0.0; its capabilities now ship here.
+The current unified release is **v4.1.0**. The distribution remains `had-env`; imports remain `had_env` and `make_env`. **v4.0.2** refined the continuous paper-style formulation while preserving **v4.0.0** environment behavior. The original complete **v3.0.0** release, **baseline-v4-20261008**, and stage tags remain recovery points. The historical [SkyHAD-Workbench v1.0.0 repository](https://github.com/Sailero/SkyHAD-Workbench) was pinned to SkyHAD v3.0.0; its capabilities now ship here.
 
 MIT License, copyright 2026 Saileron. See [LICENSE](LICENSE).

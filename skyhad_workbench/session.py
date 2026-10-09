@@ -294,7 +294,8 @@ class SimulationSession:
         if scenario.plane_altitude is not None:
             config["plane_altitude"] = scenario.plane_altitude
         effective = EnvConfig.from_values(config)
-        scenario_health = float(initial_health if scenario.target_health is None else scenario.target_health)
+        health = scenario.target_health if scenario.target_health is not None else config.get("target_health")
+        scenario_health = float(initial_health if health is None else health)
         scenario_horizon = HorizonPolicy if scenario.horizon_policy is None else scenario.horizon_policy
         scenario_altitude = effective.plane_altitude
         target_positions = tuple(tuple(float(x) for x in row["position"])

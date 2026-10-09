@@ -15,7 +15,7 @@ from .session import SimulationSession
 
 def scenario_signature(scenario):
     """Structural test conditions, excluding opening randomness and split labels."""
-    from had_env.config import EnvConfig, initial_health, load_config
+    from had_env.config import EnvConfig, HorizonPolicy, initial_health, load_config
     config = load_config(scenario.env_config)
     health = scenario.target_health if scenario.target_health is not None else config.get("target_health")
     health = float(initial_health if health is None else health)
@@ -24,9 +24,10 @@ def scenario_signature(scenario):
     if scenario.plane_altitude is not None:
         config["plane_altitude"] = scenario.plane_altitude
     effective = EnvConfig.from_values(config)
+    horizon = HorizonPolicy if scenario.horizon_policy is None else scenario.horizon_policy
     return (scenario.protocol_id, scenario.red_count, scenario.blue_count, scenario.opponent,
             scenario.max_steps, scenario.command_interval, scenario.target_positions,
-            scenario.task_mode, health, scenario.horizon_policy, scenario.spatial_dim, scenario.plane_altitude,
+            scenario.task_mode, health, horizon, scenario.spatial_dim, effective.plane_altitude,
             effective.env_agent_type, effective.env_agent_action_type,
             json.dumps(effective.to_dict(), sort_keys=True, separators=(",", ":")))
 

@@ -1,10 +1,10 @@
 # SkyHAD v4 validation
 
-The v4 refactor changes repository organization and removes desktop and algorithm-specific adapters. It preserves the native motion, interaction, observation, reward and termination rules of v3.0.0. The immutable complete release is still available at `v3.0.0`.
+The v4.0 refactor organized the readable environment core and separated the desktop tools. v4.1 reunites the complete optional workbench with that single core. Native motion, interaction, observation, reward and termination rules are preserved. The immutable original complete release remains available at `v3.0.0`; each historical acceptance below refers to its recorded version.
 
 ## Reproduce the retained checks
 
-From a fresh Python 3.10+ environment, at the repository root:
+From a fresh Python 3.10-3.12 environment, at the repository root:
 
 ```bash
 pip install -e ".[test]"
@@ -20,7 +20,7 @@ pip install -e ".[test,render]"
 python -m pytest -q
 ```
 
-The render tests set dummy SDL drivers themselves and exercise real RGB frames. No desktop workbench is needed. Tests are organized into five subjects: API, dynamics, combat/tasks, grouping, and optional rendering.
+The core tests cover API, dynamics, combat/tasks, grouping and optional rendering. Render tests exercise real RGB frames with dummy SDL drivers. For the complete optional workbench checks, install `.[viewer,test]` and run the same pytest command; they additionally cover live Qt workers, recording/replay, portable and nested branches, evaluation, and figure/video export. Ubuntu Qt tests need the system `libegl1` runtime.
 
 ## Behavior preservation
 
@@ -86,6 +86,31 @@ The 2026-10-09 correction treats each native theme as one paper-style section, w
 
 The v4.0.1 layout and all earlier validation evidence remain recoverable at their existing tags. Compilation and review artifacts stay outside the repository.
 
+## v4.1.0 unified environment and workbench
+
+The 2026-10-09 revision reunites the environment and the complete desktop tools in one distribution. `had_env` remains the single simulator; `skyhad_workbench` supplies optional live controls, recording, playback, saved branches, evaluation and figure/video export. Native flight sessions use the simulator's fixed-roster transition contract directly. Parallel, MPE and grouping interfaces retain their existing behavior. The mathematical TeX/PDF are byte-for-byte unchanged from v4.0.2: 36 pages with sixteen continuous theme sections.
+
+Shared geometry now distinguishes fixed-wing and quadrotor vehicles in the native renderer, Qt viewer and figure export. Aircraft attitude cues use the recorded physical state. The particle geometry and simulation laws remain unchanged. Presentation-only differences do not invalidate exact branches; dynamics, lifecycle, effective configuration and policy changes remain strict compatibility boundaries. Original v3 recordings remain readable; exact continuation requires the original compatible simulator revision rather than bypassing that boundary.
+
+| Check | Result |
+| --- | --- |
+| Final-version checkout before final portability/configuration regressions | 204 passed; 2 optional Torch tests skipped; 3 existing upstream deprecation warnings |
+| CLI/package portability correction | 40 passed; 1 optional Torch skip; all eight help entries exercise strict cp1252 output |
+| Portable branch/effective-evaluation correction | 62 passed; 1 optional Torch skip; real configured-health continuation and equivalent/different horizon/altitude cases |
+| Fresh final base-only wheel | Installed and exercised outside the checkout with isolated Python; no Qt, Pygame, Matplotlib or Torch installed/imported |
+| Wheel packaging | `had_env-4.1.0-py3-none-any.whl`, approximately 141 KiB excluding dependencies; both console aliases and MIT/Saileron license payload verified |
+| Paired v4.0.2/v4.1.0 transitions | All 16 native combinations, two seeds each, plus 6 grouping model/task runs: 38/38 JSON payloads byte-identical |
+| Comparison coverage | Reset/step actions, actor observations, critic features, entity/rigid states, health, rewards, asset damage, termination and truncation |
+| Rendering acceptance | Native/Qt/figure views of all three models inspected, including light/dark, grayscale and dense views; SVG/PDF exports inspected |
+| Native defender example | Six acceleration-control model/task cells; deterministic frozen Blue rule, replaceable Red navigation, task-specific metrics and explicit truncation denominator |
+| Legacy records | Genuine compressed v3 recording loads; incompatible exact continuation rejects explicitly |
+
+The frozen defender example is an evaluation starting point, not a trained MARL result or coverage claim for all sixteen native combinations. It distinguishes automatic firing from attacker navigation and does not introduce a universal scripted-attacker interface. Optional Torch paths were skipped because Torch is absent; no Torch validation is claimed.
+
+Final review corrected two configuration boundaries without changing simulation laws: portable restoration now uses the same explicit/configured/default target-health precedence as construction, and grouping evaluation compares effective horizon and altitude instead of accepting equivalent spellings as structural OOD. Genuine mismatches remain rejected. Both regressions failed before their fixes; the final scoped review approved both corrections.
+
+The original environment and independent-workbench histories were saved as verified Git bundles outside the repository before migration. Original ignored recordings and images were also copied and checked separately; generated QA output and those backups are not source-distribution content. The main-folder installation, hosted matrix and authorized old-folder removal are recorded below only after those actions complete.
+
 ## Recovery checkpoints
 
 | Tag | Saved stage |
@@ -103,5 +128,8 @@ The v4.0.1 layout and all earlier validation evidence remain recoverable at thei
 | `v4.0.1` | Final IEEE layout revision |
 | `v4.0.2rc1` | Continuous theme sections and paper-style prose |
 | `v4.0.2` | Verified formulation continuity release |
+| `v4.1.0a1` | Complete workbench reunited with the single environment core |
+| `v4.1.0a2` | Shared aircraft rendering and visual acceptance |
+| `v4.1.0rc1` | Public benchmark example, MIT license, concise documentation and CI |
 
 The independent tool repository has its own `v1.0.0` tag. To inspect a prior environment version without changing your working checkout, use `git worktree add <new-directory> <tag>` and install it in a separate Python environment. Tags and normal Git history preserve all stages; no history was rewritten.

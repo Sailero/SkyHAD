@@ -1,5 +1,5 @@
 import copy
-from dataclasses import make_dataclass
+from dataclasses import make_dataclass, replace
 import json
 import pickle
 
@@ -52,6 +52,41 @@ def test_initial_snapshot_and_branch_of_recorded_branch_resume_exactly(tmp_path)
                 with reopened.branch(934) as nested:
                     assert nested.state.to_dict() == reopened.state.to_dict()
                     assert decode_snapshot(nested.episode.metadata["initial_snapshot"])["physical"].step_count == reopened.state.step
+
+
+@pytest.mark.parametrize("target_health, expected_health", [(None, 3.), (4., 4.)])
+def test_configured_target_health_resumes_portable_recordings_and_nested_branches(tmp_path, target_health, expected_health):
+    from skyhad_workbench.cli import reconstruct_branch
+    from skyhad_workbench.protocols import CUSTOM_PROTOCOL, ScenarioSpec
+    scenario = ScenarioSpec(protocol_id=CUSTOM_PROTOCOL, red_count=2, blue_count=1,
+                            max_steps=6, command_interval=1, env_config={"target_health": 3.},
+                            target_health=target_health)
+    with SimulationSession(scenario) as session:
+        assert session.env.target_health == expected_health
+        initial = json.loads(json.dumps(session.episode.metadata["initial_snapshot"]))
+        with SimulationSession.from_snapshot(initial, scenario) as restored:
+            assert restored.env.target_health == expected_health
+            action = rule_grouping(session.state)
+            expected = session.step(action)
+            actual = restored.step(action)
+            assert actual.state.to_dict() == expected.state.to_dict()
+            assert actual.info == expected.info
+            assert restored.episode.frames[-1]["entities"] == session.episode.frames[-1]["entities"]
+        for incompatible in (replace(scenario, target_health=5., scenario_id=""),
+                             replace(scenario, target_health=None, env_config={"target_health": 5.}, scenario_id="")):
+            with pytest.raises(ValueError, match="protocols differ"):
+                SimulationSession.from_snapshot(initial, incompatible)
+        loaded = load_episode(session.save(tmp_path / "configured.json.gz"))
+    branch = reconstruct_branch(loaded, 0, policy="rule", seed=728)
+    assert decode_snapshot(branch.metadata["initial_snapshot"])["target_health"] == expected_health
+    assert branch.frames[0]["entities"] == loaded.frames[0]["entities"]
+    saved_branch = load_episode(branch.save(tmp_path / "configured-branch.json.gz"))
+    step = saved_branch.decisions[1]["step"]
+    nested = reconstruct_branch(saved_branch, step, policy="rule", seed=934)
+    assert decode_snapshot(nested.metadata["initial_snapshot"])["target_health"] == expected_health
+    assert nested.metadata["branch"]["parent_step"] == step
+    assert nested.frames[0]["entities"] == saved_branch.frame_at(step)["entities"]
+    assert nested.metadata["complete"]
 
 
 def test_snapshot_rejects_source_changes_executable_types_and_tampering():
