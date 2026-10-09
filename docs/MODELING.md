@@ -1,6 +1,6 @@
 # SkyHAD v4 mathematical model
 
-The [36-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There are four shared-formulation pages and two pages for each model/control/task combination. The PDF uses IEEE journal layout with a 10pt normal body; topic pairs reference the common formulas. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
+The [36-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There are four shared-formulation pages and two pages for each model/control/task combination. The PDF uses IEEE journal layout with a 10pt normal body. Each theme has one section number and continuous subsections across two pages, connecting its physical model and action interface to defender observations, task return and policy objective. Shared formulas are referenced where needed. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
 
 | Model | Control interfaces | Tasks | Themes |
 | --- | --- | --- | --- |

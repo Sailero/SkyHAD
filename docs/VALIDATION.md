@@ -71,6 +71,21 @@ The 2026-10-09 patch changes the mathematical source/PDF and their documentation
 
 The revision separates shared laws from theme-specific instances and clarifies exact value conditioning for recurrent policies. It distinguishes a six-DOF vehicle from its twelve-dimensional state stored in thirteen values, including a unit quaternion. The original 33-page PDF and its validation evidence remain recoverable at v4.0.0. One-off compilation, rendering and review artifacts stay outside the repository.
 
+## v4.0.2 formulation continuity
+
+The 2026-10-09 correction treats each native theme as one paper-style section, with continuous subsection numbering and a single narrative from dynamics and control to defender information, task reward and policy optimization. It revises document structure and prose, plus release metadata. Environment behavior and the independent v1.0.0 workbench remain unchanged.
+
+| Check | Result |
+| --- | --- |
+| Theme structure | Sixteen single numbered sections V-XX; one theme heading across each two-page section |
+| Page map | 36 A4 pages: four overview pages and themes 1-16 on pages 5-36 |
+| Continuity | Subsection letters continue across page boundaries; repeated page introductions and checklist narration consolidated |
+| Mathematical preservation | Existing display equations, physical parameters, observation/reward definitions and task semantics retained and independently reviewed |
+| PDF acceptance | Rebuilt from source; 10pt normal body; all pages rendered and inspected; embedded fonts and resolved references; no overflow or overlap |
+| Retained core tests | 102 passed; 3 upstream deprecation warnings |
+
+The v4.0.1 layout and all earlier validation evidence remain recoverable at their existing tags. Compilation and review artifacts stay outside the repository.
+
 ## Recovery checkpoints
 
 | Tag | Saved stage |
@@ -85,6 +100,8 @@ The revision separates shared laws from theme-specific instances and clarifies e
 | `v4.0.0` | Final integrated release; original 33-page formulation |
 | `v4.0.1a1` | Four-page common formulation and sixteen theme instances |
 | `v4.0.1rc1` | IEEE-style 36-page formulation and visual acceptance |
-| `v4.0.1` | Final mathematical documentation revision |
+| `v4.0.1` | Final IEEE layout revision |
+| `v4.0.2rc1` | Continuous theme sections and paper-style prose |
+| `v4.0.2` | Verified formulation continuity release |
 
 The independent tool repository has its own `v1.0.0` tag. To inspect a prior environment version without changing your working checkout, use `git worktree add <new-directory> <tag>` and install it in a separate Python environment. Tags and normal Git history preserve all stages; no history was rewritten.
