@@ -1,6 +1,6 @@
 # SkyHAD environment API
 
-The public entry points are `had_env.make_env`, `had_env.parallel_env`, and `from make_env import make_env`. The package contains the environment and a general grouping extension. It contains no algorithm-specific adapter or desktop tool.
+The public entry points are `had_env.make_env`, `had_env.parallel_env`, and `from make_env import make_env`. One `had-env` distribution contains the native environment, a general grouping extension, and optional `skyhad_workbench` recording/desktop tools. It contains no learning algorithm or algorithm-specific adapter.
 
 ## Construction
 
@@ -124,4 +124,4 @@ The blue upper rule is reactive, balanced, or concentrated, and the lower naviga
 
 A macro step advances at least one physical step and returns at an absolute command tick, a nonterminal casualty, or episode end. If no defender survives while the episode remains active, it continues autonomously to episode end instead of returning at casualty or command boundaries; blue commands still refresh at their usual opportunities, and `info["no_red_continuation"]` is True. `info["delta"]` records elapsed steps. Damage macro reward sums negative step damage without intra-macro discounting. Survival pays terminal defender success 1, otherwise 0, and its `horizon_policy=red_win/draw/blue_win` is a grouping convention, distinct from native sampling truncation. A discounting learner should account explicitly for macro duration.
 
-In-memory `snapshot()` and `restore()` support independent continuation of the grouping environment under identical configuration. Desktop portable recording and branching are part of the separately versioned workbench.
+In-memory `snapshot()` and `restore()` support independent continuation of the grouping environment under identical configuration. Portable recording, replay and exact branching belong to the optional `skyhad_workbench` tools in this same distribution. Exact continuation requires compatible scientific behavior and configuration; historical recordings remain viewable without granting cross-version continuation. See the [workbench commands](../README.md#optional-research-workbench).

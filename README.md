@@ -1,28 +1,23 @@
 # SkyHAD
 
-SkyHAD is an aerial attack-defense environment for multi-agent reinforcement learning. The red team defends stationary assets against the blue team. Choose particle, six-degree-of-freedom fixed-wing, or quadrotor dynamics; the collision, automatic attack, and task rules are shared.
-
-The environment contains no learning algorithm. Its primary interface is PettingZoo Parallel; a fixed-list MPE adapter and a grouping interface are also available.
+SkyHAD is an aerial attack-defense environment for multi-agent reinforcement learning. Red defends stationary assets against Blue. Choose particle, six-degree-of-freedom fixed-wing, or quadrotor dynamics; collision, automatic attack and task rules are shared. One `had-env` distribution contains the native simulator and optional research workbench. No learning algorithm is included.
 
 ## Install and run
 
-Python 3.10 or newer:
+Use **Python 3.10–3.12**. The base installation needs NumPy, SciPy, Gymnasium and PettingZoo; desktop/rendering dependencies are optional.
 
 ```bash
-pip install -e .
+git clone https://github.com/Sailero/SkyHAD.git
+cd SkyHAD
+python -m pip install -e .
 python examples/quickstart.py
 ```
 
 ```python
 from had_env import make_env
 
-env = make_env(
-    env_agent_type="UAV_quadrotor",
-    env_agent_action_type="acceleration",
-    task_mode="damage",
-    red_count=4, blue_count=4, target_count=2,
-    max_cycles=100,
-)
+env = make_env(env_agent_type="UAV_quadrotor", task_mode="damage",
+               red_count=4, blue_count=4, target_count=2, max_cycles=100)
 observations, infos = env.reset(seed=42)
 try:
     while env.agents:
@@ -32,9 +27,15 @@ finally:
     env.close()
 ```
 
-This example samples both teams' actions. For defender training, replace the red actions with your decentralized policies and the blue actions with an explicitly supplied opponent. Automatic fire is part of the simulator; opponent navigation is not built into Parallel/MPE.
+This loop samples both teams. For a reproducible defender comparison with frozen Blue navigation and a replaceable Red callable, run:
 
-## Choose a task
+```bash
+python examples/defender_evaluation.py --model UAV_quadrotor --task damage --seeds 11 12 13 --horizon 100
+```
+
+The [benchmark protocol](docs/BENCHMARK.md) explains the six acceleration demonstrations, policy replacement and correct metrics. Parallel/MPE callers supply opponent navigation explicitly; automatic fire is part of the simulator.
+
+## Choose a task and control
 
 | Setting | Options |
 | --- | --- |
@@ -44,16 +45,13 @@ This example samples both teams' actions. For defender training, replace the red
 | `api` | `parallel` (default), `mpe`, `grouping` |
 | `spatial_dim` | 3 (factory default); particle also supports 2 |
 
-These choices define **16 model/action/task combinations**. Position actions specify a destination for a controller; they do not teleport the aircraft. Acceleration actions for UAVs pass through a flight controller. Actuator actions control the physical inputs directly.
+These choices provide **16 native model/action/task combinations**. Position commands move through a controller; UAV acceleration intentions also pass through existing flight controllers. Actuator commands specify physical inputs directly. Fixed-wing aircraft cannot hover.
 
-- **Survival:** defend every asset. An asset's destruction is a defender loss; eliminating all blue attackers is a defender win. The default native team reward is +10/-10 at the corresponding terminal transition.
-- **Damage:** minimize accumulated raw damage to assets. Asset health stays fixed for accounting, while every hit adds damage. The red team receives minus the new damage each step; blue receives the opposite reward.
+**Survival:** destruction of any asset is a Red loss; eliminating all Blue Attack agents is a Red win. The default native terminal team reward is +10/-10. **Damage:** Red minimizes cumulative raw asset damage and receives minus the new damage each step; Blue receives the opposite reward. Asset health stays fixed for Damage accounting.
 
-Each agent receives its team's full reward. Do not sum identical rewards over teammates to obtain the team score. Native `max_cycles` is a sampling truncation and does not award a win.
+Each agent receives its team's full reward. Count it once per step, including after individual casualties; do not sum it across teammates. Native `max_cycles` is a sampling truncation and never awards a win. See [API details](docs/API.md) for observation units, masks, role counts, configuration and initialization.
 
-See [API details](docs/API.md) for observations, action units, termination masks, custom geometry, and initialization.
-
-## Grouping and hierarchical decisions
+## Grouping decisions
 
 ```python
 from had_env import make_env
@@ -61,7 +59,7 @@ from had_env.grouping.policies import RulePolicy
 
 env = make_env(api="grouping", red=8, blue=8, targets=2,
                task_mode="damage", max_steps=100)
-policy = RulePolicy("rule")  # Replace with your upper-level grouping policy.
+policy = RulePolicy("rule")
 try:
     state = env.reset(seed=42)
     while not env.done:
@@ -70,119 +68,67 @@ finally:
     env.close()
 ```
 
-The action assigns surviving defenders to protected targets or a reserve. A lower-level executor produces their flight actions. This interface has built-in blue assignment and rush rules and returns at decision boundaries; `info["delta"]` is the number of physical steps advanced. It supports all three models with acceleration control. Grouping survival has its own terminal reward and horizon convention, documented in the API.
+Grouping assigns surviving defenders to assets or reserve; its lower executor produces acceleration intentions. It supports all three models and includes Blue assignment/rush rules. `info["delta"]` counts physical steps advanced to each decision boundary. Grouping Survival has its own reward and horizon convention, documented in the API.
 
-## Rendering and development
+## Optional research workbench
 
 ```bash
-pip install -e ".[render]"  # Basic env.render(), without a desktop workbench.
-pip install -e ".[test]"
-python -m pytest -q
+python -m pip install -e ".[viewer]"
+skyhad-workbench live --agent-type UAV_fixedwing --policy rule
+skyhad-workbench record --policy rule --output outputs/episode.json.gz
+skyhad-workbench inspect outputs/episode.json.gz
+skyhad-workbench view outputs/episode.json.gz
+skyhad-workbench branch outputs/episode.json.gz --step 0 --policy grand --seed 20260909 --output outputs/branch.json.gz
+skyhad-workbench view outputs/episode.json.gz --compare outputs/branch.json.gz
+skyhad-workbench export outputs/episode.json.gz outputs/figure.png --step 10
+skyhad-workbench export outputs/episode.json.gz outputs/episode.mp4 --fps 30 --steps-per-second 5
+skyhad-workbench evaluate examples/evaluation.json --policies rule grand --training-seeds 0 --output outputs/evaluation
 ```
 
-Set `render_mode="human"` for a window or `"rgb_array"` for an image. Rendering dependencies are optional; headless training uses only the base installation. Render tests skip when Pygame is absent.
+`had-workbench` and `python -m skyhad_workbench` are aliases of the same CLI. The live Qt viewer supports pause, physical single-step, next decision/event, selection, overlays, comparison and branching. `live --native` selects direct flight controls; `--agent-action-type position` or `actuator` uses `--action-mode continuous_native`. Native external policies connect through `FlightSession`; the CLI's `--policy` names select grouping policies.
 
-A local `.venv/` is your Python installation, is ignored by Git, and is not part of the repository distribution.
+Replay uses `view`; historical JSON/GZ records remain readable. Exact continuation requires compatible scientific behavior/configuration and a recorded snapshot. CLI `branch --step` selects a recorded grouping decision boundary (listed by `inspect`); native flight branching uses `FlightSession.branch`. Export the current XY/XZ scene as PNG/SVG/PDF with the viewer's **导出画面** control. CLI `export` creates a scientific map/profile/alive-count chart with attribution, supporting PNG/SVG/PDF or MP4 plus metadata sidecars. Paired ID/OOD evaluation above applies to grouping Survival policies; native defender and Damage results use the separate protocol linked above.
+
+![Actual fixed-wing simulator render with XY/XZ projections and task diagnostics](docs/showcase.png)
+
+Actual fixed-wing Survival render from the grouping rule session, seed 20260907, after physical stepping. The workbench and native renderer use the same simulator and aircraft geometry.
+
+## Basic rendering and tests
+
+```bash
+python -m pip install -e ".[render]"  # Pygame rendering without the Qt workbench.
+python -m pip install -e ".[viewer,test]"
+python -B -m pytest -q -p no:cacheprovider
+```
+
+Set native `render_mode="human"` for a window or `"rgb_array"` for RGB pixels. Rendering does not change observations, physics or RNG. CI tests Ubuntu/Windows on Python 3.10/3.12, a fresh headless installed wheel, and offscreen viewer/export behavior. Torch is optional and its dedicated tests skip when absent. `.venv/`, generated outputs and caches are ignored local files, not distributed source.
 
 ## Read the environment
 
-Start with the [quickstart](examples/quickstart.py), then follow `reset()` and `step()` through the environment interface, simulation, dynamics and interaction, task scoring, and observation construction. The `grouping/` package is a separate extension; reading the native environment does not require it.
+Start with [quickstart](examples/quickstart.py), then trace an action through `factory.py` → `environment.step()` → `simulation.step_physics()` → `world.step()`. The world predicts motion, resolves synchronous collisions and automatic fire, then applies simultaneous damage. `dynamics/` and `agents/` provide physical evolution; `observations.py` packs actor/critic features and `tasks.py` computes rewards/endings. `env.simulation` is the sole simulator with fixed-order `entities`.
 
-```text
-had_env/
-  environment.py     # Parallel RL interface
-  simulation.py      # Episode lifecycle and command conversion
-  world.py           # Motion, collision and simultaneous interaction
-  initialization.py  # Initial layouts
-  observations.py    # Actor observations and critic features
-  tasks.py           # Rewards and episode endings
-  config.py          # Parameters and model presets
-  agents/            # Attack, Scout and Disturb roles
-  dynamics/          # Six-DOF models and flight controllers
-  grouping/          # General hierarchical decisions and rule execution
-  render/            # Optional basic rendering
-examples/             # Minimal interaction examples
-tests/                # Focused behavioral checks
-docs/                 # API and mathematical formulation
-```
-
-The native route is `make_env -> HADParallelEnv -> Simulation -> World.step`, followed by task scoring and observation construction. `env.simulation` is the physical simulator; `env.simulation.entities` is its fixed-order entity list.
-
-<details>
-<summary>Why each shipped file exists</summary>
-
-| File | Responsibility |
+| Files | Responsibility |
 | --- | --- |
-| `.gitattributes` | Normalize tracked text line endings across platforms. |
-| `.gitignore` | Exclude virtual environments, caches, build output and experiment data. |
-| `README.md` | Installation, minimal interaction, task selection and the code reading route. |
-| `pyproject.toml` | Build metadata, dependency groups and pytest discovery. |
-| `make_env.py` | Preserve the short public import used by existing environment consumers. |
-| `docs/API.md` | Environment contracts, units, observations, rewards and hierarchical interface. |
-| `docs/MODELING.md` | Defender task definitions and the mathematical model behind the simulator. |
-| `docs/PROBLEM_FORMULATION.pdf` | The 36-page IEEE-style defender formulation of all 16 themes. |
-| `docs/PROBLEM_FORMULATION.tex` | Editable mathematical source for the formulation PDF. |
-| `docs/VALIDATION.md` | Test commands, behavior comparisons and release checkpoints. |
-| `examples/quickstart.py` | A complete minimal Parallel reset/action/step/close loop. |
-| `examples/grouping.py` | A minimal upper-level grouping interaction loop. |
-| `had_env/__init__.py` | Public factory exports and software version. |
-| `had_env/actions.py` | Stable 3D and planar discrete acceleration direction tables. |
-| `had_env/config.py` | One location for immutable instance configuration, presets and physical defaults. |
-| `had_env/factory.py` | Resolve configuration and select Parallel, MPE or grouping. |
-| `had_env/scenario.py` | Validate roster/role choices and construct the physical simulation. |
-| `had_env/environment.py` | Parallel spaces, joint-action validation, masks and lifecycle. |
-| `had_env/mpe.py` | Adapt Parallel to fixed-order observations/actions and done lists. |
-| `had_env/simulation.py` | Coordinate reset, command conversion, physical stepping and rendering. |
-| `had_env/world.py` | Predict synchronized motion, resolve collisions, trigger fire and apply simultaneous damage. |
-| `had_env/initialization.py` | Sample or construct aircraft and asset layouts with the instance RNG. |
-| `had_env/observations.py` | Build local entity rows, participation masks and centralized features. |
-| `had_env/tasks.py` | Define damage accounting, rewards and natural episode endings. |
-| `had_env/geometry.py` | Shared distance, sector, damage falloff and synchronous collision mathematics. |
-| `had_env/agents/__init__.py` | Declare the entity-role package. |
-| `had_env/agents/base.py` | Entity health, particle motion, boundaries and rigid-state synchronization. |
-| `had_env/agents/attack.py` | Attack-role behavior and survival auxiliary rewards. |
-| `had_env/agents/scout.py` | Scout sector behavior and auxiliary rewards. |
-| `had_env/agents/disturb.py` | Disturb sector behavior and auxiliary rewards. |
-| `had_env/dynamics/__init__.py` | Select the rigid-body dynamics model. |
-| `had_env/dynamics/control.py` | Quaternion rotations and shared flight-control mathematics. |
-| `had_env/dynamics/rigid_body.py` | Newton-Euler evolution and RK4 substep integration. |
-| `had_env/dynamics/fixedwing.py` | Fixed-wing aerodynamics, propeller, trim and flight controllers. |
-| `had_env/dynamics/quadrotor.py` | Rotor force/moment mapping and quadrotor flight controllers. |
-| `had_env/grouping/__init__.py` | Expose the general grouping action and decision-state types. |
-| `had_env/grouping/domain.py` | Stable entity identities and validated target-group assignments. |
-| `had_env/grouping/environment.py` | Advance upper-level actions to periodic or casualty decision boundaries. |
-| `had_env/grouping/adapter.py` | Connect group assignments, low-level controls and the physical simulation. |
-| `had_env/grouping/actions.py` | Construct and decode grouping actions. |
-| `had_env/grouping/opponents.py` | Reactive, balanced and concentrated blue target-assignment rules. |
-| `had_env/grouping/policies.py` | Simple example upper-level policies. |
-| `had_env/grouping/rules.py` | Execute defender group assignments as low-level flight intentions. |
-| `had_env/render/__init__.py` | Declare optional rendering without importing Pygame in headless mode. |
-| `had_env/render/render.py` | Draw the native environment and return RGB frames. |
-| `had_env/render/glyphs.py` | Aircraft/rotor vector shapes and attitude-aware icon geometry. |
-| `had_env/resources/target.png` | Asset icon for native rendering. |
-| `had_env/resources/target_dead.png` | Destroyed-asset icon for native rendering. |
-| `tests/test_api.py` | Verify interface, configuration, observation, seeding and action-validation contracts. |
-| `tests/test_dynamics.py` | Verify physical forces, control modes, rigid states and integration. |
-| `tests/test_combat.py` | Verify collision, simultaneous damage, task rewards and episode endings. |
-| `tests/test_grouping.py` | Verify grouping execution, seeded episodes and independent snapshot continuation. |
-| `tests/test_render.py` | Verify optional rendering lifecycle and image output. |
-| `tests/data/physics_reference.json` | Independent pre-refactor physical trajectory expectations. |
-| `tests/data/grouping_extraction_validation.json` | Independent pre-refactor grouping episode expectations. |
+| `had_env/__init__.py`, `factory.py`, root `make_env.py` | Public construction and one software version |
+| `config.py`, `scenario.py`, `initialization.py`, `actions.py` | Resolved model/geometry, rosters, seeded layouts and direction tables |
+| `environment.py`, `mpe.py` | Parallel and fixed-list action/observation lifecycle |
+| `simulation.py`, `world.py`, `geometry.py`, `agents/`, `dynamics/` | Native stepping, combat, entity roles and motion/controllers |
+| `observations.py`, `tasks.py` | Actor/critic encoding, damage, rewards and natural endings |
+| `had_env/grouping/` | Optional upper-level assignments and lower rule execution |
+| `had_env/render/`, `resources/` | Optional rendering, vector glyphs and asset icons |
+| `skyhad_workbench/session.py`, `agent_session.py` | Optional grouping/native session execution and policy integration |
+| Workbench `recording.py`, `playback.py`, `snapshot.py`, `rng.py`, `identity.py` | Records, historical replay and independent exact continuation |
+| Workbench `protocols.py`, `evaluation.py` | Scenario contracts and paired evaluation |
+| Workbench `live.py`, `gui.py`, `views.py`, `export.py`, `cli.py` | Owned debug workers, Qt views, exports and CLI |
+| `examples/`, `tests/`, `docs/` | Minimal loops, behavior/packaging checks and API/model documentation |
+| `pyproject.toml`, `LICENSE`, `.github/workflows/tests.yml` | One distribution, MIT license and supported-platform CI |
 
-</details>
+Reading the core does not require the optional grouping/workbench code. For tools, start with the [recording example](examples/recording.py), then the relevant session, recording/snapshot and view/export modules. No second simulator, algorithm-specific adapter or separate tool installation is required.
 
-## Mathematical formulation
+## Mathematical formulation and versions
 
-[MODELING.md](docs/MODELING.md) explains the two tasks and the defender's Dec-POMDP. [PROBLEM_FORMULATION.pdf](docs/PROBLEM_FORMULATION.pdf) contains 36 pages in IEEE journal style: four pages of shared formulation and an index, then two pages for each of the 16 themes. The normal body text is 10pt. Each theme forms one continuous section across its two pages: dynamics, control and initialization lead into defender information, task payoff and policy optimization. Subsection numbering continues across the page boundary. Its [LaTeX source](docs/PROBLEM_FORMULATION.tex) is editable for a paper's Problem Formulation chapter. The formulation distinguishes the mathematical Markov state from the packed critic features returned by `state()`.
+[MODELING.md](docs/MODELING.md) introduces the two tasks and defender Dec-POMDP. The [36-page continuous IEEE formulation](docs/PROBLEM_FORMULATION.pdf) has shared material and two-page sections for all 16 themes; its [LaTeX source](docs/PROBLEM_FORMULATION.tex) remains editable. It distinguishes the full mathematical Markov state from the packed critic features returned by `state()`. [VALIDATION.md](docs/VALIDATION.md) records release checks and historical checkpoints.
 
-Reproducible checks and their results are recorded in [VALIDATION.md](docs/VALIDATION.md).
+The current unified release line is **v4.1.0** (this candidate: **v4.1.0rc1**). The distribution remains `had-env`; imports remain `had_env` and `make_env`. **v4.0.2** refined the continuous paper-style formulation while preserving **v4.0.0** environment behavior. The original complete **v3.0.0** release, **baseline-v4-20261008**, and stage tags remain recovery points. The historical [SkyHAD-Workbench v1.0.0 repository](https://github.com/Sailero/SkyHAD-Workbench) was pinned to SkyHAD v3.0.0; its capabilities now ship here.
 
-## Versions and tools
-
-SkyHAD **v4.0.2** focuses on the environment and general hierarchical decisions. This patch gives each theme a continuous paper-style formulation and preserves v4.0.0 environment behavior. The Python distribution remains `had-env`; imports remain `had_env` and the root `make_env` entry point.
-
-The full desktop viewer, recording, replay, exact branching, and export tools live in [SkyHAD-Workbench](https://github.com/Sailero/SkyHAD-Workbench). Its v1.0.0 release is pinned to SkyHAD v3.0.0. The environment v4 package has no desktop CLI or Qt dependency.
-
-Open_Score-specific adapters have been removed. An algorithm project can implement its own adapter against SkyHAD's public interface.
-
-The original complete release remains available at **v3.0.0**. The refactoring baseline is **baseline-v4-20261008**; stage tags preserve workbench extraction, algorithm-adapter removal, core simplification, documentation, and final validation.
+MIT License, copyright 2026 Saileron. See [LICENSE](LICENSE).

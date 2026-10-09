@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -85,7 +86,7 @@ def test_wheel_contains_both_packages_and_installed_identity(tmp_path):
     build.mkdir()
     for name in ('had_env', 'skyhad_workbench'):
         shutil.copytree(ROOT / name, build / name, ignore=shutil.ignore_patterns('__pycache__'))
-    for name in ('pyproject.toml', 'README.md', 'make_env.py'):
+    for name in ('pyproject.toml', 'README.md', 'make_env.py', 'LICENSE'):
         shutil.copy2(ROOT / name, build / name)
     wheels, installed = tmp_path / 'wheels', tmp_path / 'installed'
     result = subprocess.run([sys.executable, '-B', '-m', 'pip', 'wheel', str(build),
@@ -93,6 +94,16 @@ def test_wheel_contains_both_packages_and_installed_identity(tmp_path):
                             capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
     wheel, = wheels.glob('*.whl')
+    with zipfile.ZipFile(wheel) as archive:
+        license_names = [name for name in archive.namelist() if name.endswith('.dist-info/licenses/LICENSE')]
+        assert len(license_names) == 1, 'The wheel must deliver its MIT license'
+        license_text = archive.read(license_names[0]).decode('utf-8')
+        assert 'Copyright (c) 2026 Saileron' in license_text
+        assert 'Permission is hereby granted, free of charge' in license_text
+        assert 'THE SOFTWARE IS PROVIDED "AS IS"' in license_text
+        metadata = archive.read(next(n for n in archive.namelist() if n.endswith('.dist-info/METADATA'))).decode('utf-8')
+        assert 'License-Expression: MIT' in metadata
+        assert 'License-File: LICENSE' in metadata
     result = subprocess.run([sys.executable, '-B', '-m', 'pip', 'install', str(wheel),
                              '--no-deps', '--target', str(installed)],
                             capture_output=True, text=True, timeout=90)
