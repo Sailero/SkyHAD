@@ -109,7 +109,24 @@ The frozen defender example is an evaluation starting point, not a trained MARL 
 
 Final review corrected two configuration boundaries without changing simulation laws: portable restoration now uses the same explicit/configured/default target-health precedence as construction, and grouping evaluation compares effective horizon and altitude instead of accepting equivalent spellings as structural OOD. Genuine mismatches remain rejected. Both regressions failed before their fixes; the final scoped review approved both corrections.
 
-The original environment and independent-workbench histories were saved as verified Git bundles outside the repository before migration. Original ignored recordings and images were also copied and checked separately; generated QA output and those backups are not source-distribution content. The main-folder installation, hosted matrix and authorized old-folder removal are recorded below only after those actions complete.
+The original environment and independent-workbench histories were saved as verified Git bundles outside the repository before migration. Original ignored recordings and images were copied and checked separately; generated QA output and those backups are not source-distribution content.
+
+### Final integration acceptance
+
+| Check | Result |
+| --- | --- |
+| Reviewed source | Whole-branch review and one scoped configuration-fix review approved; no outstanding Critical/Important findings |
+| Hosted candidate matrix | Ubuntu/Windows, Python 3.10/3.12: each 226 passed, 2 optional Torch skips, 2 upstream warnings; all four jobs successful at `ce1367f` |
+| Actual main installation | Unified v4.1.0 editable distribution reinstalled; both packages and console aliases load the main folder, including after retiring the old path |
+| Complete integrated main suite | 226 passed, 2 optional Torch skips, 3 existing upstream warnings in 62.64 seconds |
+| Original local outputs | All 8 files, 380,662 bytes, migrated under the same relative paths and byte-compared with both original and backup |
+| Generated QA outputs | Archived separately before restoring original files; no original data overwritten |
+| Historical recovery | Complete original tool refs/history reverified against its Git bundle; all existing environment tags retained |
+| Repository size | Source archive approximately 0.65 MB including docs/tests; wheel 144,159 bytes excluding dependencies; local runtimes/outputs/backups ignored |
+
+The cross-platform golden-trajectory test now applies its existing `rtol=0, atol=1e-11` position/velocity tolerance to initial floating values and raw initial observations as well. The old exact initializer comparison rejected observed platform roundoff of approximately 4.5e-13. Original golden data were not regenerated; roster, health, firing/disturbance flags, rewards and terminal results retain their exact checks. Focused validation accepts the observed roundoff and rejects 1e-8 drift and changed discrete fields.
+
+After the merge and acceptance, the old local tool checkout was moved into the external recoverable backup archive; its former active project path is absent. Automatic approval review rejected recursive deletion with only `blocked by policy`, so no permanent-deletion claim is made. The main project and external backups remain intact. The historical independent GitHub tool repository is untouched.
 
 ## Recovery checkpoints
 
@@ -131,5 +148,6 @@ The original environment and independent-workbench histories were saved as verif
 | `v4.1.0a1` | Complete workbench reunited with the single environment core |
 | `v4.1.0a2` | Shared aircraft rendering and visual acceptance |
 | `v4.1.0rc1` | Public benchmark example, MIT license, concise documentation and CI |
+| `v4.1.0` | Accepted unified environment/workbench, rendering, protocol and portable installation |
 
 The independent tool repository has its own `v1.0.0` tag. To inspect a prior environment version without changing your working checkout, use `git worktree add <new-directory> <tag>` and install it in a separate Python environment. Tags and normal Git history preserve all stages; no history was rewritten.
