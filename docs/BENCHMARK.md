@@ -35,10 +35,4 @@ Each JSON result records ordered seeds, episode count, horizon, physical timeste
 
 For fair comparison, freeze Blue and the evaluated Red checkpoint before testing; use identical ordered seeds, horizon, roster, role counts, asset distribution, geometry, model/control and native rewards for every Red method. Independently seed/reset Red memory and RNG each episode. Keep training/validation openings separate from evaluation, publish every raw episode including truncations, and pair comparisons by seed within the same configuration. Report different models/tasks as separate experiment cells; their preset scale and dynamics differ. The three default seeds demonstrate reproducibility rather than statistical significance.
 
-The workbench already provides explicit paired ID/OOD scenarios and uncertainty across training-seed means for **grouping Survival policies**:
-
-```bash
-skyhad-workbench evaluate examples/evaluation.json --policies rule grand --training-seeds 0 --output outputs/evaluation
-```
-
-That evaluator accepts grouping policies through `SimulationSession`, not this example's native Red callable, and rejects Damage win-rate summaries. Its command clock and horizon conventions belong to the grouping protocol. Reuse it for that scope rather than relabeling native results as the grouping benchmark.
+Statistics are code utilities: import `run_episode` and `summarize` from the example, or write per-seed JSON with `--output`. For paired comparisons, align raw episodes by seed and compute uncertainty across independent training seeds in your experiment code. The grouping interface has its own command clock and horizon conventions; report those separately from native Parallel evaluation. Historical desktop evaluation tools remain available at earlier release tags.

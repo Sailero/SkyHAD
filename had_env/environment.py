@@ -58,7 +58,7 @@ class HADParallelEnv(ParallelEnv):
         if render_mode not in (None, "human", "rgb_array"):
             raise ValueError("render_mode must be None, 'human', or 'rgb_array'")
         if render_mode is not None and not self.metadata['render_modes']:
-            raise ValueError('The core edition supports only render_mode=None; use the full main branch for visualization.')
+            raise ValueError('This installation has no native rendering backend.')
         if not isinstance(continuous, bool):
             raise ValueError("continuous must be a boolean")
         self.scenario = scenario or Scenario()
@@ -292,6 +292,10 @@ class HADParallelEnv(ParallelEnv):
         if self.render_mode == "human":
             self.simulation.render()
         return None
+
+    def set_view_mode(self, mode):
+        """Keep the render API unchanged while choosing 2D or full UAV 3D."""
+        self.simulation.set_view_mode(mode)
 
     def close(self):
         self.simulation.close()

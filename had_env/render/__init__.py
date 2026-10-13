@@ -1,1 +1,1 @@
-"""Optional HAD pygame renderer."""
+"""Optional environment renderers and small capture utilities; no desktop app."""

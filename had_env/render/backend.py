@@ -36,6 +36,8 @@ def render_metadata(simulation):
 
 
 def render_rgb_array(simulation, include_result=True):
+    if simulation._view_mode == '3d':
+        return _scene3d(simulation).render_rgb_array()
     import pygame
     from .render import DisplayPlayer
     if not pygame.font.get_init():
@@ -50,6 +52,11 @@ def render_rgb_array(simulation, include_result=True):
 
 
 def render(simulation):
+    if simulation._view_mode == '3d':
+        if not _scene3d(simulation).render():
+            simulation.close()
+            return False
+        return True
     import pygame
     from .render import DisplayPlayer
     if simulation._display_player is None or not pygame.display.get_init():
@@ -64,3 +71,10 @@ def render(simulation):
         simulation.close()
         return False
     return True
+
+
+def _scene3d(simulation):
+    if simulation._scene3d_renderer is None:
+        from .native3d import Native3DRenderer
+        simulation._scene3d_renderer = Native3DRenderer(simulation)
+    return simulation._scene3d_renderer

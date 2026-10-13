@@ -114,3 +114,12 @@ def test_projected_uav_nose_agrees_with_metric_displacement():
     nose = np.asarray(aircraft_geometry(row, 'xz', center=center)['nose']) - center
     projected = np.asarray(player.project_position([.5+1/2000,.5,.5+1/1500], 'xz')) - center
     np.testing.assert_allclose(nose / np.linalg.norm(nose), projected / np.linalg.norm(projected), atol=1e-12)
+
+
+def test_collapsed_altitude_keeps_visible_entities_in_a_plane_panel():
+    player, surface = player_and_surface()
+    player.configure_bounds([[-1000,1000],[-1000,1000],[40,40]])
+    player.draw_agents(surface, [dict(position=[.5,.5,.5], velocity=[1,0,0], type='Attack',
+        env_agent_type='UAV_fixedwing', attitude=[1,0,0,0], alive=True)], 'Red')
+    rect = player.panel_rects['xz']
+    assert np.any(pygame.surfarray.array_alpha(surface)[:,rect.top:rect.bottom])

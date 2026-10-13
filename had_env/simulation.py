@@ -10,7 +10,7 @@ from had_env.config import (
     reward_episode,
     reward_scout_single,
 )
-from had_env._rendering import has_native_renderer, native_backend
+from had_env._rendering import has_native_renderer, has_3d_renderer, native_backend
 from had_env.world import World
 from had_env.initialization import reset_random, reset_uniform
 from had_env.observations import observations, alive_entities, global_state
@@ -91,6 +91,8 @@ class Simulation(World):
 
         self._display_player = None
         self._rgb_player = None
+        self._scene3d_renderer = None
+        self._view_mode = 'projections'
         self._render_closed = False
 
         self.task_type = task_type
@@ -205,8 +207,22 @@ class Simulation(World):
         return native_backend().render_metadata(self)
 
     def render_rgb_array(self, include_result=True):
-        """Delegate RGB rendering to the optional full-edition backend."""
+        """Return the selected view without changing physical state."""
         return native_backend().render_rgb_array(self, include_result)
+
+    def set_view_mode(self, mode):
+        """Select basic 2D projections or the full edition's UAV 3D scene."""
+        if mode not in ('projections', '3d'):
+            raise ValueError("view mode must be 'projections' or '3d'")
+        if mode == '3d':
+            if self.env_agent_type not in ('UAV_fixedwing', 'UAV_quadrotor'):
+                raise ValueError('3D rendering is supported for UAV_fixedwing and UAV_quadrotor.')
+            if not has_3d_renderer():
+                raise ValueError('3D rendering requires the full edition on the main branch; core retains basic 2D rendering.')
+        if mode != self._view_mode:
+            self.close()
+            self._view_mode = mode
+            self._render_closed = False
 
     def render(self):
         """Return False when rendering is unavailable or the window is closed."""
@@ -220,4 +236,7 @@ class Simulation(World):
             self._display_player.close_window()
         self._display_player = None
         self._rgb_player = None
+        if self._scene3d_renderer is not None:
+            self._scene3d_renderer.close()
+            self._scene3d_renderer = None
         self._render_closed = True

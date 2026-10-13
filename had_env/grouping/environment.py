@@ -26,12 +26,16 @@ class KnownOpponentEnv:
                  command_interval=None, executor=None, group_max_size=None,
                  targets=None, target_positions=None, horizon_policy=None,
                  task_mode=None, target_health=None, spatial_dim=None, plane_altitude=None,
-                 env_agent_type=None, env_agent_action_type=None, config=None):
+                 env_agent_type=None, env_agent_action_type=None, render_mode=None, config=None):
         from had_env.config import EnvConfig, load_config
         values = load_config(config)
         def resolve(name, explicit, default, alias=None):
             return explicit if explicit is not None else values.get(name, values.get(alias, default))
         red = resolve('red', red, 8, 'red_count')
+        self.render_mode = resolve('render_mode', render_mode, None)
+        if self.render_mode not in (None, 'human', 'rgb_array'):
+            raise ValueError("render_mode must be None, 'human', or 'rgb_array'")
+        self._has_reset = False
         blue = resolve('blue', blue, 8, 'blue_count')
         max_steps = resolve('max_steps', max_steps, 100, 'max_cycles')
         opponent = resolve('opponent', opponent, 'reactive')
@@ -129,6 +133,9 @@ class KnownOpponentEnv:
         self.blue_grouping = Grouping(())
         self.executor.reset(self.adapter.red_ids)
         self.done = False
+        self._has_reset = True
+        if self.render_mode == 'human':
+            self.render()
         return self.state()
 
     def state(self) -> DecisionState:
@@ -221,6 +228,8 @@ class KnownOpponentEnv:
                         truncated=bool(physical_info["truncated"]),
                         bootstrap_mask=float(not physical_info["terminated"]),
                         macro_target_damage=-macro_reward)
+        if self.render_mode == 'human':
+            self.render()
         return after, macro_reward if self.task_mode == "damage" else float(success), bool(self.done), info
 
     def snapshot(self) -> dict:
@@ -262,8 +271,21 @@ class KnownOpponentEnv:
         self.opponent_rng.bit_generator.state = copy.deepcopy(snapshot["opponent_rng"])
         self._numpy_state = copy.deepcopy(snapshot["numpy_state"])
         self.done, self.seed = bool(snapshot["done"]), int(snapshot["seed"])
+        self._has_reset = True
         return self.state()
 
     def close(self):
-        """No window is opened and no worker process is owned by this env."""
+        """Release optional rendering resources."""
+        self.adapter.env.close()
+
+    def set_view_mode(self, mode):
+        self.adapter.env.set_view_mode(mode)
+
+    def render(self):
+        if not self._has_reset:
+            raise RuntimeError('Call reset before rendering')
+        if self.render_mode == 'rgb_array':
+            return self.adapter.env.render_rgb_array()
+        if self.render_mode == 'human':
+            self.adapter.env.render()
         return None

@@ -7,7 +7,11 @@ def has_native_renderer():
     return Path(__file__).with_name('render').joinpath('backend.py').is_file()
 
 
+def has_3d_renderer():
+    return Path(__file__).with_name('render').joinpath('native3d.py').is_file()
+
+
 def native_backend():
     if not has_native_renderer():
-        raise RuntimeError('Rendering is unavailable in the core edition; use the full main branch.')
+        raise RuntimeError('The native rendering backend is unavailable in this installation.')
     return import_module('had_env.render.backend')

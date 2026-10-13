@@ -76,6 +76,10 @@ class MPEEnv:
     def state(self):
         return self.parallel_env.state()
 
+    @property
+    def render_mode(self):
+        return self.parallel_env.render_mode
+
     def render(self, mode=None):
         if mode is not None:
             if mode not in self.metadata["render_modes"]:
@@ -85,3 +89,6 @@ class MPEEnv:
 
     def close(self):
         self.parallel_env.close()
+
+    def set_view_mode(self, mode):
+        self.parallel_env.set_view_mode(mode)

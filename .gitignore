@@ -17,3 +17,5 @@ checkpoints/
 Thumbs.db
 Open-SCORE/
 .vscode/
+
+.worktrees/

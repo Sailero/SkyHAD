@@ -1,25 +1,36 @@
-# SkyHAD
+# SkyHAD 4.2
 
-SkyHAD is an aerial attack-defense environment for multi-agent reinforcement learning. Red defends stationary assets against Blue. Choose particle, six-degree-of-freedom fixed-wing, or quadrotor dynamics; collision, automatic attack and task rules are shared. One `had-env` distribution contains the native simulator and optional research workbench. No learning algorithm is included.
+SkyHAD is an aerial attack-defense environment for multi-agent reinforcement learning. Red defends stationary assets against Blue. Particle, six-DOF fixed-wing and quadrotor models share collision, automatic attack, observation and task rules. No learning algorithm is included.
 
-## Install and run
+Choose **main** for the environment, default 2D projections, optional native 3D and video recording. Choose **core** for the same environment and minimal 2D rendering. Both branches use `had-env` / `had_env`, version 4.2.0, and retain the same physics and Parallel/MPE/grouping APIs. Keep separate virtual environments. See [edition selection](docs/EDITIONS.md).
 
-Use **Python 3.10–3.12**. The base installation needs NumPy, SciPy, Gymnasium and PettingZoo; desktop/rendering dependencies are optional.
+## Install
+
+Use Python 3.10-3.12. The base installation needs only NumPy, SciPy, Gymnasium and PettingZoo. Rendering dependencies are optional; no Torch is required.
 
 ```bash
-git clone https://github.com/Sailero/SkyHAD.git
-cd SkyHAD
-python -m pip install -e .
+git clone --branch main https://github.com/Sailero/SkyHAD.git SkyHAD-full
+cd SkyHAD-full
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -e ".[render,viewer3d,record]"
 python examples/quickstart.py
 ```
+
+`render` adds Pygame for 2D; `viewer3d` adds PySide6 and VisPy; `record` adds ImageIO and its FFmpeg integration. Install only `.` for headless RL, or `.[render]` for 2D. Linux Qt/3D sessions need a usable OpenGL context and the system EGL runtime (`libegl1` on Ubuntu).
+
+## Environment and rendering
 
 ```python
 from had_env import make_env
 
-env = make_env(env_agent_type="UAV_quadrotor", task_mode="damage",
-               red_count=4, blue_count=4, target_count=2, max_cycles=100)
-observations, infos = env.reset(seed=42)
+env = make_env(env_agent_type="UAV_fixedwing", task_mode="survival",
+               red_count=4, blue_count=4, max_cycles=100, render_mode="human")
+# Default: minimal 2D projections. Full main can switch to native 3D:
+env.set_view_mode("3d")
 try:
+    observations, infos = env.reset(seed=42)
     while env.agents:
         actions = {agent: env.action_space(agent).sample() for agent in env.agents}
         observations, rewards, terminated, truncated, infos = env.step(actions)
@@ -27,15 +38,31 @@ finally:
     env.close()
 ```
 
-This loop samples both teams. For a reproducible defender comparison with frozen Blue navigation and a replaceable Red callable, run:
+Human mode renders through the environment's normal reset/step lifecycle. `env.set_view_mode("projections")` selects the default projections again. Use `render_mode="rgb_array"` and `env.render()` to obtain an RGB frame; leave `render_mode=None` for headless training. View changes do not change physics, observations, actions or RNG. Core supports 2D only and gives guidance when a full-only view is requested.
 
-```bash
-python examples/defender_evaluation.py --model UAV_quadrotor --task damage --seeds 11 12 13 --horizon 100
+## Video from code
+
+The full edition records frames directly from the environment:
+
+```python
+from had_env import make_env
+from had_env.render.video import VideoRecorder
+
+env = make_env(red_count=4, blue_count=4, max_cycles=100, render_mode="rgb_array")
+try:
+    env.reset(seed=42)
+    with VideoRecorder(env, "outputs/episode.mp4", fps=10) as recorder:
+        recorder.capture()
+        while env.agents:
+            env.step({agent: env.action_space(agent).sample() for agent in env.agents})
+            recorder.capture()
+finally:
+    env.close()
 ```
 
-The [benchmark protocol](docs/BENCHMARK.md) explains the six acceleration demonstrations, policy replacement and correct metrics. Parallel/MPE callers supply opponent navigation explicitly; automatic fire is part of the simulator.
+Each capture writes one frame. `fps` controls video playback speed; the display target of 30 FPS does not assert physical real-time playback. See `examples/rendering.py` for native rendering/recording usage. There are no desktop workbench, recording/replay command tools or analysis panels.
 
-## Choose a task and control
+## Tasks, controls and grouping
 
 | Setting | Options |
 | --- | --- |
@@ -45,13 +72,7 @@ The [benchmark protocol](docs/BENCHMARK.md) explains the six acceleration demons
 | `api` | `parallel` (default), `mpe`, `grouping` |
 | `spatial_dim` | 3 (factory default); particle also supports 2 |
 
-These choices provide **16 native model/action/task combinations**. Position commands move through a controller; UAV acceleration intentions also pass through existing flight controllers. Actuator commands specify physical inputs directly. Fixed-wing aircraft cannot hover.
-
-**Survival:** destruction of any asset is a Red loss; eliminating all Blue Attack agents is a Red win. The default native terminal team reward is +10/-10. **Damage:** Red minimizes cumulative raw asset damage and receives minus the new damage each step; Blue receives the opposite reward. Asset health stays fixed for Damage accounting.
-
-Each agent receives its team's full reward. Count it once per step, including after individual casualties; do not sum it across teammates. Native `max_cycles` is a sampling truncation and never awards a win. See [API details](docs/API.md) for observation units, masks, role counts, configuration and initialization.
-
-## Grouping decisions
+These choices provide sixteen native model/action/task themes. Fixed-wing aircraft cannot hover. Survival gives Red a loss when any defended asset is destroyed and a win when all Blue attackers are eliminated. Damage uses minus the new raw asset damage as Red's team reward. Every teammate receives the same team reward; count it once per step. `max_cycles` is a sampling truncation, not a win.
 
 ```python
 from had_env import make_env
@@ -68,69 +89,19 @@ finally:
     env.close()
 ```
 
-Grouping assigns surviving defenders to assets or reserve; its lower executor produces acceleration intentions. It supports all three models and includes Blue assignment/rush rules. `info["delta"]` counts physical steps advanced to each decision boundary. Grouping Survival has its own reward and horizon convention, documented in the API.
-
-## Optional research workbench
-
-The Qt viewer needs the system EGL runtime on Linux; on Ubuntu, install `libegl1` with the system package manager.
+Pure environment evaluation is available in both editions:
 
 ```bash
-python -m pip install -e ".[viewer]"
-skyhad-workbench live --agent-type UAV_fixedwing --policy rule
-skyhad-workbench record --policy rule --output outputs/episode.json.gz
-skyhad-workbench inspect outputs/episode.json.gz
-skyhad-workbench view outputs/episode.json.gz
-skyhad-workbench branch outputs/episode.json.gz --step 0 --policy grand --seed 20260909 --output outputs/branch.json.gz
-skyhad-workbench view outputs/episode.json.gz --compare outputs/branch.json.gz
-skyhad-workbench export outputs/episode.json.gz outputs/figure.png --step 10
-skyhad-workbench export outputs/episode.json.gz outputs/episode.mp4 --fps 30 --steps-per-second 5
-skyhad-workbench evaluate examples/evaluation.json --policies rule grand --training-seeds 0 --output outputs/evaluation
+python examples/defender_evaluation.py --model UAV_quadrotor --task damage --seeds 11 12 13 --horizon 100
 ```
 
-`had-workbench` and `python -m skyhad_workbench` are aliases of the same CLI. The live Qt viewer supports pause, physical single-step, next decision/event, selection, overlays, comparison and branching. `live --native` selects direct flight controls; `--agent-action-type position` or `actuator` uses `--action-mode continuous_native`. Native external policies connect through `FlightSession`; the CLI's `--policy` names select grouping policies.
+Read the [API](docs/API.md), [modeling assumptions](docs/MODELING.md), [benchmark protocol](docs/BENCHMARK.md), mathematical [PDF](docs/PROBLEM_FORMULATION.pdf) and [validation record](docs/VALIDATION.md). The retained zero-span observation normalization issue is documented there.
 
-Replay uses `view`; historical JSON/GZ records remain readable. Exact continuation requires compatible scientific behavior/configuration and a recorded snapshot. CLI `branch --step` selects a recorded grouping decision boundary (listed by `inspect`); native flight branching uses `FlightSession.branch`. Export the current XY/XZ scene as PNG/SVG/PDF with the viewer's **导出画面** control. CLI `export` creates a scientific map/profile/alive-count chart with attribution, supporting PNG/SVG/PDF or MP4 plus metadata sidecars. Paired ID/OOD evaluation above applies to grouping Survival policies; native defender and Damage results use the separate protocol linked above.
-
-![Actual fixed-wing simulator render with XY/XZ projections and task diagnostics](docs/showcase.png)
-
-Actual fixed-wing Survival render from the grouping rule session, seed 20260907, after physical stepping. The workbench and native renderer use the same simulator and aircraft geometry.
-
-## Basic rendering and tests
+## Tests and releases
 
 ```bash
-python -m pip install -e ".[render]"  # Pygame rendering without the Qt workbench.
-python -m pip install -e ".[viewer,test]"
-python -B -m pytest -q -p no:cacheprovider
+python -m pip install -e ".[render,viewer3d,record,test]"
+python -m pytest -q
 ```
 
-Set native `render_mode="human"` for a window or `"rgb_array"` for RGB pixels. Rendering does not change observations, physics or RNG. CI tests Ubuntu/Windows on Python 3.10/3.12, a fresh headless installed wheel, and offscreen viewer/export behavior. Torch is optional and its dedicated tests skip when absent. `.venv/`, generated outputs and caches are ignored local files, not distributed source.
-
-## Read the environment
-
-Start with [quickstart](examples/quickstart.py), then trace an action through `factory.py` → `environment.step()` → `simulation.step_physics()` → `world.step()`. The world predicts motion, resolves synchronous collisions and automatic fire, then applies simultaneous damage. `dynamics/` and `agents/` provide physical evolution; `observations.py` packs actor/critic features and `tasks.py` computes rewards/endings. `env.simulation` is the sole simulator with fixed-order `entities`.
-
-| Files | Responsibility |
-| --- | --- |
-| `had_env/__init__.py`, `factory.py`, root `make_env.py` | Public construction and one software version |
-| `config.py`, `scenario.py`, `initialization.py`, `actions.py` | Resolved model/geometry, rosters, seeded layouts and direction tables |
-| `environment.py`, `mpe.py` | Parallel and fixed-list action/observation lifecycle |
-| `simulation.py`, `world.py`, `geometry.py`, `agents/`, `dynamics/` | Native stepping, combat, entity roles and motion/controllers |
-| `observations.py`, `tasks.py` | Actor/critic encoding, damage, rewards and natural endings |
-| `had_env/grouping/` | Optional upper-level assignments and lower rule execution |
-| `had_env/render/`, `resources/` | Optional rendering, vector glyphs and asset icons |
-| `skyhad_workbench/session.py`, `agent_session.py` | Optional grouping/native session execution and policy integration |
-| Workbench `recording.py`, `playback.py`, `snapshot.py`, `rng.py`, `identity.py` | Records, historical replay and independent exact continuation |
-| Workbench `protocols.py`, `evaluation.py` | Scenario contracts and paired evaluation |
-| Workbench `live.py`, `gui.py`, `views.py`, `export.py`, `cli.py` | Owned debug workers, Qt views, exports and CLI |
-| `examples/`, `tests/`, `docs/` | Minimal loops, behavior/packaging checks and API/model documentation |
-| `pyproject.toml`, `LICENSE`, `.github/workflows/tests.yml` | One distribution, MIT license and supported-platform CI |
-
-Reading the core does not require the optional grouping/workbench code. For tools, start with the [recording example](examples/recording.py), then the relevant session, recording/snapshot and view/export modules. No second simulator, algorithm-specific adapter or separate tool installation is required.
-
-## Mathematical formulation and versions
-
-[MODELING.md](docs/MODELING.md) introduces the two tasks and defender Dec-POMDP. The [36-page continuous IEEE formulation](docs/PROBLEM_FORMULATION.pdf) has shared material and two-page sections for all 16 themes; its [LaTeX source](docs/PROBLEM_FORMULATION.tex) remains editable. It distinguishes the full mathematical Markov state from the packed critic features returned by `state()`. [VALIDATION.md](docs/VALIDATION.md) records release checks and historical checkpoints.
-
-The current unified release is **v4.1.0**. The distribution remains `had-env`; imports remain `had_env` and `make_env`. **v4.0.2** refined the continuous paper-style formulation while preserving **v4.0.0** environment behavior. The original complete **v3.0.0** release, **baseline-v4-20261008**, and stage tags remain recovery points. The historical [SkyHAD-Workbench v1.0.0 repository](https://github.com/Sailero/SkyHAD-Workbench) was pinned to SkyHAD v3.0.0; its capabilities now ship here.
-
-MIT License, copyright 2026 Saileron. See [LICENSE](LICENSE).
+Base-only tests skip optional render checks. Full CI additionally exercises real Linux OpenGL. Paired releases use `v4.2.0-full` and `v4.2.0-core`; existing historical tags remain available. The core provenance manifest identifies its exact full source commit and shared file hashes.

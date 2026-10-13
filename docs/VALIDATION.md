@@ -1,6 +1,8 @@
-# SkyHAD v4 validation
+# SkyHAD validation record
 
 The v4.0 refactor organized the readable environment core and separated the desktop tools. v4.1 reunites the complete optional workbench with that single core. Native motion, interaction, observation, reward and termination rules are preserved. The immutable original complete release remains available at `v3.0.0`; each historical acceptance below refers to its recorded version.
+
+The v4.0/v4.1 sections below are historical evidence for those tagged releases, including their then-current workbench scope. They do not describe the v4.2 package or current install extras.
 
 ## Reproduce the retained checks
 
@@ -151,3 +153,30 @@ After the merge and acceptance, the old local tool checkout was moved into the e
 | `v4.1.0` | Accepted unified environment/workbench, rendering, protocol and portable installation |
 
 The independent tool repository has its own `v1.0.0` tag. To inspect a prior environment version without changing your working checkout, use `git worktree add <new-directory> <tag>` and install it in a separate Python environment. Tags and normal Git history preserve all stages; no history was rewritten.
+
+
+## v4.2.0 environment editions: final scope
+
+The final user-selected scope removes the desktop workbench, recording/replay commands and analysis panels from both editions. Both branches retain the environment and minimal 2D rendering. Full main adds native 3D and VideoRecorder from code; core physically omits those modules and Qt/VisPy/ImageIO dependencies. Basic environment benchmark metrics remain in both. Core optionally installs Pygame with `.[render]`; its base install remains headless. Full optional extras are `render`, `viewer3d` and `record`.
+
+The reviewed generator copies the shared engine and 2D render code byte-for-byte, selects native target icons, and records exact source SHA and file hashes in identical source/installed manifests. Packaging builds from separate copied source trees so build byproducts cannot contaminate the publisher artifact. The common workflow blob is copied without an edition template and checked against the tested source commit before any publish mutation.
+
+```bash
+python -m pip install -e ".[render,viewer3d,record,test]"
+python -m pytest tests/test_editions.py -q
+python tools/verify_editions.py --source . --ref <full-40-character-SHA> --output ../SkyHAD-edition-validation
+```
+
+Use explicit `--working-tree` instead of `--ref` for unpublished edits. Installed validation builds both wheels/sdists externally, verifies no desktop package/entry points, inspects core exclusions and optional dependency metadata, exercises a genuinely base-only installed core, and compares 96 seeded trajectory signatures across all sixteen themes, Parallel/MPE, 2D/3D particle and grouping cases. Each seed 17/42 cell has three transitions or earlier termination; the retained suite supplies longer physical regressions. Captures include observations/actions, state and rigid state/quaternion/angular velocity, rewards/lifecycle/events and RNG. Grouping snapshots also fix ambient NumPy seed 20261013. The validator separately installs only core's Pygame extra to verify 2D RGB output. Same-runner equality is not a cross-platform floating-point identity claim. No Torch is required.
+
+Earlier working-tree evidence (96 matched signatures and 114 fresh installed core tests) predates the final rendering-scope/API revision and is historical diagnostic evidence, not final-release acceptance. Final exact-commit validation is required after the native APIs and full-only modules are finalized. Quick generator/archive/packaging checks cover the new selection and no-workbench metadata.
+
+Shared CI detects the edition, runs both OS/Python matrices, and adds usable Linux GL and installed parity only for full. Core matrix installs base/test dependencies and no Qt prerequisites. The serialized core publisher requires all relevant main jobs, current source SHA and exact canonical workflow bytes; it never force-pushes. Pre-push validation handles the default token's push-workflow trigger limitation. See [EDITIONS.md](EDITIONS.md) for clone commands, separate environments and paired `v4.2.0-full`/`v4.2.0-core` tags.
+
+The known zero-span observation normalization issue remains shared; this rendering/packaging release does not change that scientific behavior.
+
+### Local final-scope acceptance
+
+The complete offscreen suite passed **198 tests**, with **11 OpenGL-context skips** and three existing upstream warnings in 227.07 seconds. Genuine native Windows OpenGL checks separately passed **29 scene/adapter tests** with no skips, including both UAV models, raw coordinate/quaternion use, dense updates, window lifecycle and simulator/ambient RNG preservation. The last video encoding correction then passed **22 scoped tests**, including two additional regressions: odd-sized RGB frames decode successfully after at most one edge pixel of padding, and source frames remain unchanged. Those scoped additions postdate full-suite collection.
+
+Actual two-dimensional and three-dimensional MP4 output was decoded; PNG scenes were inspected. Parallel/MPE/grouping view selection and fresh grouping snapshot restoration are covered. Independent review identified and verified the grouping render-readiness repair; the video correction closes the other final-scope finding. Final exact-commit package/parity and hosted CI evidence is recorded by the generated validation report and release workflow, rather than inferred from the earlier workbench suite.

@@ -3,10 +3,45 @@ on:
   push:
     branches: ['**']
   pull_request:
+    branches: [main, core]
 permissions:
   contents: read
 jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      edition: ${{ steps.detect.outputs.edition }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Detect validated edition layout
+        id: detect
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          root = Path.cwd()
+          workbench = (root / 'skyhad_workbench').is_dir()
+          renderer = (root / 'had_env/render/backend.py').is_file()
+          manifest_path = root / 'edition-manifest.json'
+          assert not workbench, 'Desktop workbench is excluded from both editions'
+          assert renderer, 'Both editions require the minimal 2D renderer'
+          if not manifest_path.exists():
+              edition = 'full'
+          elif manifest_path.is_file():
+              manifest = json.loads(manifest_path.read_text())
+              assert manifest['edition'] == 'core'
+              assert manifest_path.read_bytes() == (root / 'had_env/edition_manifest.json').read_bytes()
+              for name in ('scene3d.py', 'native3d.py', 'video.py'):
+                  assert not (root / 'had_env/render' / name).exists()
+              assert (root / 'had_env/resources/target.png').is_file()
+              edition = 'core'
+          else:
+              raise RuntimeError('Invalid mixed full/core edition layout')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'edition={edition}\n')
   tests:
+    needs: detect
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,13 +61,14 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install Linux Qt runtime prerequisite
-        if: runner.os == 'Linux'
+        if: needs.detect.outputs.edition == 'full' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libegl1
       - run: python -m pip install --upgrade pip "setuptools>=77" wheel
       - run: python -m pip wheel . --no-deps --wheel-dir "${{ runner.temp }}/skyhad-wheels"
       - name: Fresh headless installed-wheel smoke
+        if: needs.detect.outputs.edition == 'full'
         shell: python
         run: |
           import os
@@ -51,19 +87,16 @@ jobs:
           from importlib.metadata import distribution
           from pathlib import Path
           import sys
-          import had_env, skyhad_workbench
-          from skyhad_workbench.session import SimulationSession
-          from skyhad_workbench.agent_session import FlightSession
-          for module in (had_env, skyhad_workbench):
-              assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          import had_env
+          assert Path(had_env.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          assert importlib.util.find_spec('skyhad_workbench') is None
           assert all(importlib.util.find_spec(name) is None for name in ('pygame', 'PySide6', 'matplotlib', 'torch'))
           package = distribution('had-env')
-          assert package.version == had_env.__version__ == skyhad_workbench.__version__
+          assert package.version == had_env.__version__
           assert package.metadata['License-Expression'] == 'MIT'
           license_file, = [p for p in package.files if str(p).endswith('.dist-info/licenses/LICENSE')]
           assert 'Copyright (c) 2026 Saileron' in package.locate_file(license_file).read_text()
-          entries = {e.name: e.value for e in package.entry_points}
-          assert entries['skyhad-workbench'] == entries['had-workbench'] == 'skyhad_workbench.cli:main'
+          assert not package.entry_points
           env = had_env.make_env(red_count=1, blue_count=1, max_cycles=1)
           try:
               env.reset(seed=11)
@@ -77,6 +110,72 @@ jobs:
           print('headless installed wheel and MIT license: OK')
           '''
           subprocess.run([str(python), '-I', '-B', '-c', code], cwd=root, check=True)
-          subprocess.run([str(python), '-I', '-B', '-m', 'skyhad_workbench', '--help'], cwd=root, check=True)
-      - run: python -m pip install -e ".[viewer,test]"
+      - name: Install full viewer test dependencies
+        if: needs.detect.outputs.edition == 'full'
+        run: python -m pip install -e ".[render,viewer3d,record,test]"
+      - name: Install minimal core test dependencies
+        if: needs.detect.outputs.edition == 'core'
+        run: python -m pip install -e ".[test]"
       - run: python -B -m pytest -q -p no:cacheprovider
+
+  usable-gl:
+    needs: detect
+    if: needs.detect.outputs.edition == 'full'
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      SKYHAD_REQUIRE_3D: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth libegl1 libgl1-mesa-dri libxcb-cursor0 libxkbcommon-x11-0
+      - run: python -m pip install -e ".[render,viewer3d,test]"
+      - run: xvfb-run -a python -B -m pytest tests/test_scene3d.py tests/test_native3d.py tests/test_native_view_modes.py -q -p no:cacheprovider
+
+  editions:
+    needs: detect
+    if: needs.detect.outputs.edition == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip "setuptools>=77" wheel
+      - run: python tools/verify_editions.py --source . --ref "${{ github.sha }}" --output "${{ runner.temp }}/edition-validation"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-core
+          path: ${{ runner.temp }}/edition-validation/core-source
+          include-hidden-files: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edition-validation-report
+          path: ${{ runner.temp }}/edition-validation/validation-report.json
+
+  publish-core:
+    needs: [detect, tests, usable-gl, editions]
+    if: always() && needs.detect.outputs.edition == 'full' && needs.detect.result == 'success' && needs.tests.result == 'success' && needs.usable-gl.result == 'success' && needs.editions.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Sailero/SkyHAD'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: skyhad-core-publisher
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-core
+          path: ${{ runner.temp }}/validated-core
+      - run: python tools/publish_core.py --source . --generated "${{ runner.temp }}/validated-core" --source-sha "${{ github.sha }}"

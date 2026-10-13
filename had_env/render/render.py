@@ -68,7 +68,10 @@ class DisplayPlayer:
 
     def configure_bounds(self, bounds):
         self.bounds = np.asarray(bounds, float)
-        span = np.maximum(self.bounds[:, 1] - self.bounds[:, 0], 1.)
+        raw_span = self.bounds[:, 1] - self.bounds[:, 0]
+        # A constant axis has no measurable extent; reserve a readable plane
+        # panel instead of allowing its clip rectangle to round to zero pixels.
+        span = np.where(raw_span > 0, raw_span, max(float(raw_span.max()), 1.) * .1)
         width, height = self.screen.get_size()
         scale = min((width-100)/span[0], (height-148)/(span[1]+span[2]))
         panel_width = scale*span[0]
