@@ -49,208 +49,193 @@ def draw_isosceles_triangle(screen, size, center, angle=0., color=(255, 0, 0), t
     pygame.draw.polygon(screen, color, rotated_vertices)
 
 
-# Base class for the display system
 class DisplayPlayer:
+    """Metric XY/XZ panels with bounded, schematic entity glyphs."""
     def __init__(self, screen):
         self.screen = screen
-        self.interaction_length_range = [int(0.05 * ScreenLength), int(0.95 * ScreenLength)]
-        self.interaction_width_range = [int(0.05 * ScreenWidth), int(0.95 * ScreenWidth)]
-        self.interaction_height_range = [int(0.05 * ScreenHeight), int(0.95 * ScreenHeight)]
         self.running = True
-        self.game_over_font = pygame.font.Font(None, 72)
+        self.game_over_font = pygame.font.Font(None, 64)
         self.label_font = pygame.font.Font(None, 17)
         self.badge_font = pygame.font.Font(None, 15)
         self.transparent_layer = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        resource_dir = Path(__file__).resolve().parents[1] / 'resources'
-        self.target_image = pygame.image.load(str(resource_dir / 'target.png'))
-        self.dead_target_image = pygame.image.load(str(resource_dir / 'target_dead.png'))
-        self.result_surfaces = {
-            1: self.game_over_font.render("Red Wins", True, (255, 0, 0)),
-            -1: self.game_over_font.render("Blue Wins", True, (0, 0, 255)),
-        }
+        resources = Path(__file__).resolve().parents[1] / 'resources'
+        self.target_image = pygame.image.load(str(resources / 'target.png'))
+        self.dead_target_image = pygame.image.load(str(resources / 'target_dead.png'))
+        self.result_surfaces = {1: self.game_over_font.render('Red Wins', True, RedColor),
+                               -1: self.game_over_font.render('Blue Wins', True, BlueColor)}
+        from had_env.config import AeroPoint
+        self.configure_bounds(AeroPoint)
+
+    def configure_bounds(self, bounds):
+        self.bounds = np.asarray(bounds, float)
+        span = np.maximum(self.bounds[:, 1] - self.bounds[:, 0], 1.)
+        width, height = self.screen.get_size()
+        scale = min((width-100)/span[0], (height-148)/(span[1]+span[2]))
+        panel_width = scale*span[0]
+        left = (width-panel_width)/2
+        xy_height, xz_height = scale*span[1], scale*span[2]
+        self._panels = {'xy': (left, 72., panel_width, xy_height),
+                        'xz': (left, 108.+xy_height, panel_width, xz_height)}
+        self.panel_rects = {key: pygame.Rect(round(x), round(y), round(w), round(h))
+                            for key, (x,y,w,h) in self._panels.items()}
+        self.interaction_length_range = [left, left+panel_width]
+        self.interaction_width_range = [72., 72.+xy_height]
+        self.interaction_height_range = [108.+xy_height, 108.+xy_height+xz_height]
+
+    def project_position(self, position, projection='xy'):
+        x, y, width, height = self._panels[projection]
+        return x+float(position[0])*width, y+(1-float(position[1 if projection=='xy' else 2]))*height
 
     def update(self, agent_info_list, game_result, metadata=None):
         if not self.running:
             return
-
         self.handle_events()
-        if not self.running:
-            return
-
-        self.draw(agent_info_list, game_result, metadata)
-        pygame.display.flip()
+        if self.running:
+            self.draw(agent_info_list, game_result, metadata)
+            pygame.display.flip()
 
     def draw(self, agent_info_list, game_result, metadata=None):
-        """Draw one frame without processing events or flipping a display.
-
-        This is the reusable rendering primitive for both the pygame window
-        and off-screen scientific episode viewers.
-        """
-
-        targets_info_n, red_agents_info_n, blue_agents_info_n = agent_info_list
-
-        transparent_layer = self.transparent_layer
-        transparent_layer.fill((0, 0, 0, 0))
-
-        self.draw_targets(transparent_layer, targets_info_n)
-
-        self.draw_agents(transparent_layer, red_agents_info_n, color="Red")
-        self.draw_agents(transparent_layer, blue_agents_info_n, color="Blue")
-
-        self.screen.blit(transparent_layer, (0, 0))
-
+        if metadata is not None:
+            self.configure_bounds(metadata['world_bounds'])
+        layer = self.transparent_layer
+        layer.fill((0,0,0,0))
         self.draw_borders()
+        targets, red, blue = agent_info_list
+        self.draw_targets(layer, targets)
+        self.draw_agents(layer, red, 'Red')
+        self.draw_agents(layer, blue, 'Blue')
+        self.screen.blit(layer, (0,0))
         self.draw_labels(metadata)
-
         self.display_result(game_result)
 
-    def project_position(self, position, projection="xy"):
-        """Normalized world position to the native XY/XZ panels (y/z up)."""
-        x, y, z = position
-        horizontal = get_area_point(self.interaction_length_range, x)
-        if projection == "xy":
-            vertical = get_area_point(self.interaction_width_range, 1-y) + self.interaction_height_range[0]
-        else:
-            vertical = self.interaction_width_range[1] + get_area_point(self.interaction_height_range, 1-z)
-        return horizontal, vertical
+    def _entity_label(self, surface, label, location, color, projection):
+        image = self.badge_font.render(label, True, (255,255,255))
+        rect = image.get_rect(topleft=(location[0]+18, location[1]-18))
+        rect.clamp_ip(self.panel_rects[projection].inflate(-6,-6))
+        pygame.draw.rect(surface, color, rect.inflate(4,2), border_radius=2)
+        surface.blit(image, rect)
+
+    def draw_targets(self, surface, targets_info_n, size=12):
+        previous_clip = surface.get_clip()
+        try:
+            for projection in ('xy','xz'):
+                surface.set_clip(self.panel_rects[projection].clip(previous_clip))
+                for row in targets_info_n:
+                    center = self.project_position(row['position'], projection)
+                    alive = row.get('alive')
+                    color = RedColor if alive is True else DeadAgentColor
+                    if projection == 'xy':
+                        image = self.target_image if alive is True else self.dead_target_image
+                        surface.blit(image, image.get_rect(center=(round(center[0]),round(center[1]))))
+                    else:
+                        pygame.draw.circle(surface, color, center, int(size/1.5), 0 if alive is True else 2)
+                        if alive is False:
+                            x,y=center
+                            pygame.draw.line(surface,color,(x-5,y-5),(x+5,y+5),2)
+                    if 'id' in row:
+                        self._entity_label(surface, 'T'+str(row['id'])+(' ?' if alive is None else ''), center, color, projection)
+        finally:
+            surface.set_clip(previous_clip)
+
+    def draw_agents(self, surface, agents_info_n, color, size=12):
+        team_color = RedColor if color == 'Red' else BlueColor
+        previous_clip = surface.get_clip()
+        try:
+            for projection in ('xy','xz'):
+                surface.set_clip(self.panel_rects[projection].clip(previous_clip))
+                for row in agents_info_n:
+                    location = self.project_position(row['position'], projection)
+                    draw_color = team_color if row.get('alive') else DeadAgentColor
+                    model = row.get('env_agent_type','particle')
+                    glyph_size = max(12,size) if projection=='xy' else max(10,size/2)
+                    if model in ('UAV_fixedwing','UAV_quadrotor'):
+                        geometry = aircraft_geometry(row, projection, glyph_size, location)
+                        for polygon in geometry['polygons']:
+                            pygame.draw.polygon(surface,draw_color,polygon)
+                        for start,end in geometry['lines']:
+                            pygame.draw.line(surface,draw_color,start,end,2)
+                        for point,radius in geometry['circles']:
+                            pygame.draw.circle(surface,draw_color,point,max(2,round(radius)),1)
+                        if geometry['nose'] is not None:
+                            pygame.draw.line(surface,draw_color,location,geometry['nose'],2)
+                            pygame.draw.circle(surface,(255,255,255),geometry['nose'],2)
+                        elif geometry['toward']:
+                            pygame.draw.circle(surface,draw_color,location,2)
+                        else:
+                            x,y=location
+                            pygame.draw.line(surface,draw_color,(x-3,y-3),(x+3,y+3),2)
+                            pygame.draw.line(surface,draw_color,(x-3,y+3),(x+3,y-3),2)
+                        x,y=location
+                        for key,label,offset in (('bank','R',-18),('pitch','P',6)):
+                            surface.blit(self.badge_font.render(label,True,draw_color),(x+offset,y+16))
+                            points=geometry['indicators'].get(key)
+                            if points:
+                                pygame.draw.line(surface,draw_color,*points,1)
+                            else:
+                                surface.blit(self.badge_font.render('?',True,draw_color),(x+offset+9,y+16))
+                        label = (color[0]+str(row['id'])+' ' if 'id' in row else '')+role_badge(row)
+                        self._entity_label(surface,label,location,draw_color,projection)
+                    else:
+                        particle_size = size if projection=='xy' else size/2
+                        if row.get('type')=='Attack':
+                            pygame.draw.circle(surface,draw_color,location,int(particle_size))
+                        else:
+                            velocity=row.get('velocity') or (0,0,0)
+                            axis=1 if projection=='xy' else 2
+                            angle=-math.atan2(velocity[axis],velocity[0])
+                            draw_isosceles_triangle(surface,particle_size,location,angle,draw_color,
+                                45 if row.get('type')=='Disturb' else 36)
+                        if 'id' in row:
+                            self._entity_label(surface,color[0]+str(row['id']),location,draw_color,projection)
+        finally:
+            surface.set_clip(previous_clip)
+
+    def draw_borders(self):
+        for key,rect in self.panel_rects.items():
+            pygame.draw.rect(self.screen,BorderColor,rect,2)
+            for fraction in (.25,.5,.75):
+                x,y,w,h=self._panels[key]
+                pygame.draw.line(self.screen,(213,223,232),(x+fraction*w,y),(x+fraction*w,y+h),1)
+                pygame.draw.line(self.screen,(213,223,232),(x,y+fraction*h),(x+w,y+fraction*h),1)
 
     def draw_labels(self, metadata=None):
-        ink = (36, 52, 71)
-        def text(message, location):
-            self.screen.blit(self.label_font.render(message, True, ink), location)
-        text(ROLE_LEGEND, (40, self.screen.get_height()-18))
+        ink=(36,52,71)
+        def text(message,location):
+            available=self.screen.get_width()-int(location[0])-20
+            while self.label_font.size(message)[0]>available and len(message)>4:
+                message=message[:-5]+'...'
+            self.screen.blit(self.label_font.render(message,True,ink),location)
+        for projection,axis in (('xy',1),('xz',2)):
+            rect=self.panel_rects[projection]
+            b=self.bounds
+            text(f'{projection.upper()} | x {b[0,0]:g}..{b[0,1]:g} / {"y" if axis==1 else "z"} {b[axis,0]:g}..{b[axis,1]:g} m | equal scale',
+                 (40,rect.top-20))
+        text(ROLE_LEGEND,(40,self.screen.get_height()-18))
         if metadata is None:
-            text("XY / m", (44, 52))
-            text("XZ / m  (z up)", (44, self.screen.get_height()-38))
             return
-        bounds = metadata["world_bounds"]
-        counts = metadata["live_counts"]
-        text(f"{metadata['task_mode'].upper()}  |  step {metadata['step']}  |  live Red {counts['red']} / Blue {counts['blue']}"
-             f"  |  damage {metadata['step_target_damage']:.3f} step / {metadata['target_damage']:.3f} total", (40, 8))
-        assets = "  ".join(f"T{row['id']} HP {row['health']:.2f}/{row['max_health']:.2f}" for row in metadata["targets"])
-        # Keep dense target sets inside the fixed-size frame.
-        limit = self.screen.get_width()-80
-        while self.label_font.size(assets)[0] > limit and len(assets) > 4:
-            assets = assets[:-5] + "..."
-        text(assets, (40, 28))
-        text(f"XY  |  x {bounds[0][0]:g}..{bounds[0][1]:g} / y {bounds[1][0]:g}..{bounds[1][1]:g} m", (44, 52))
-        text(f"XZ  |  x {bounds[0][0]:g}..{bounds[0][1]:g} / z {bounds[2][0]:g}..{bounds[2][1]:g} m  (z up)",
-             (44, self.screen.get_height()-38))
+        counts=metadata['live_counts']
+        text(f"{metadata['task_mode'].upper()} | {metadata.get('env_agent_type','')} | step {metadata['step']} | live R {counts['red']} / B {counts['blue']} | damage {metadata['step_target_damage']:.3f} / {metadata['target_damage']:.3f}",(40,8))
+        def hp(value):
+            return '<0.001' if 0<value<.001 else f'{value:.2f}'
+        text('  '.join(f"T{row['id']} HP {hp(row['health'])}/{row['max_health']:.2f}" for row in metadata['targets']),(40,28))
+        text('Live: HP > 0 | Survival terminal threshold: HP < 0.001 | z up | schematic aircraft',
+             (40,self.screen.get_height()-36))
 
     def handle_events(self):
-        """Handle user input events like quitting."""
         for event in pygame.event.get():
-            if event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    self.running = False
-            elif event.type == QUIT:
-                self.running = False
-
+            if event.type==QUIT or (event.type==KEYDOWN and event.key==K_ESCAPE):
+                self.running=False
         if not self.running:
             self.close_window()
 
-    def draw_borders(self):
-        """Draw the borders of the screen."""
-        pygame.draw.line(self.screen, BorderColor,
-                         (self.interaction_length_range[0], self.interaction_width_range[0] + self.interaction_height_range[0]),
-                         (self.interaction_length_range[1], self.interaction_width_range[0] + self.interaction_height_range[0]),
-                         2)
-        pygame.draw.line(self.screen, BorderColor,
-                         (self.interaction_length_range[0], self.interaction_width_range[0] + self.interaction_height_range[0]),
-                         (self.interaction_length_range[0], self.interaction_width_range[1] + self.interaction_height_range[1]),
-                         2)
-        pygame.draw.line(self.screen, BorderColor,
-                         (self.interaction_length_range[0], self.interaction_width_range[1] + self.interaction_height_range[1]),
-                         (self.interaction_length_range[1], self.interaction_width_range[1] + self.interaction_height_range[1]),
-                         2)
-        pygame.draw.line(self.screen, BorderColor,
-                         (self.interaction_length_range[1], self.interaction_width_range[1] + self.interaction_height_range[1]),
-                         (self.interaction_length_range[1], self.interaction_width_range[0] + self.interaction_height_range[0]),
-                         2)
-        pygame.draw.line(self.screen, BorderColor,
-                         (self.interaction_length_range[0], self.interaction_width_range[1] + self.interaction_height_range[0]),
-                         (self.interaction_length_range[1], self.interaction_width_range[1] + self.interaction_height_range[0]),
-                         2)
-
-    def draw_targets(self, surface, targets_info_n, size=12):
-        for target_info in targets_info_n:
-            agent_px, agent_py, agent_pz = target_info["position"]
-            draw_target = self.target_image if target_info["alive"] else self.dead_target_image
-
-            center = self.project_position(target_info["position"])
-            # resized_image = pygame.transform.scale(image, (new_width, new_height))
-            surface.blit(draw_target, center)
-            center_z = self.project_position(target_info["position"], "xz")
-            pygame.draw.circle(surface, RedColor, center_z, int(size/1.5))
-
-    def draw_agents(self, surface, agents_info_n, color, size=12):
-        draw_color = RedColor if color == "Red" else BlueColor
-        for agent_info in agents_info_n:
-            agent_px, agent_py, agent_pz = agent_info["position"]
-            agent_vx, agent_vy, agent_vz = agent_info["velocity"]
-            draw_agent_color = draw_color if agent_info["alive"] else DeadAgentColor
-
-            center = self.project_position(agent_info["position"])
-            angle = - math.atan2(agent_vy, agent_vx)
-
-            center_z = self.project_position(agent_info["position"], "xz")
-            angle_z = np.pi / 2 if agent_vz < 0 else - np.pi / 2
-
-            model = agent_info.get("env_agent_type", "particle")
-            if model in ("UAV_fixedwing", "UAV_quadrotor"):
-                for projection, location, glyph_size in (("xy", center, max(12, size)), ("xz", center_z, max(10, size / 2))):
-                    geometry = aircraft_geometry(agent_info, projection, glyph_size, location)
-                    for polygon in geometry["polygons"]:
-                        pygame.draw.polygon(surface, draw_agent_color, polygon)
-                    for start, end in geometry["lines"]:
-                        pygame.draw.line(surface, draw_agent_color, start, end, 2)
-                    for point, radius in geometry["circles"]:
-                        pygame.draw.circle(surface, draw_agent_color, point, max(2, round(radius)), 1)
-                    if geometry["nose"] is not None:
-                        pygame.draw.line(surface, draw_agent_color, location, geometry["nose"], 2)
-                        pygame.draw.circle(surface, (255, 255, 255), geometry["nose"], 2)
-                    elif geometry["toward"]:
-                        pygame.draw.circle(surface, draw_agent_color, location, 2)
-                    else:
-                        x, y = location
-                        pygame.draw.line(surface, draw_agent_color, (x-3, y-3), (x+3, y+3), 2)
-                        pygame.draw.line(surface, draw_agent_color, (x-3, y+3), (x+3, y-3), 2)
-                    x, y = location
-                    pygame.draw.rect(surface, draw_agent_color, (x+16, y-18, 12, 12), border_radius=2)
-                    surface.blit(self.badge_font.render(role_badge(agent_info), True, (255, 255, 255)), (x+19, y-18))
-                    for key, label, offset in (("bank", "R", -18), ("pitch", "P", 6)):
-                        surface.blit(self.badge_font.render(label, True, draw_agent_color), (x+offset, y+16))
-                        points = geometry["indicators"].get(key)
-                        if points:
-                            pygame.draw.line(surface, draw_agent_color, *points, 1)
-                        else:
-                            surface.blit(self.badge_font.render("?", True, draw_agent_color), (x+offset+9, y+16))
-            elif agent_info["type"] == "Attack":
-                pygame.draw.circle(surface, draw_agent_color, center, int(size))
-                pygame.draw.circle(surface, draw_agent_color, center_z, int(size / 2))
-            elif agent_info["type"] == "Disturb":
-                draw_isosceles_triangle(surface, size=size, center=center, angle=angle, color=draw_agent_color,
-                                        top_angle=45)
-                draw_isosceles_triangle(surface, size=int(size / 2), center=center_z, angle=angle_z,
-                                        color=draw_agent_color, top_angle=45)
-            else:
-                draw_isosceles_triangle(surface, size=size, center=center, angle=angle, color=draw_agent_color,
-                                        top_angle=36)
-                draw_isosceles_triangle(surface, size=int(size / 2), center=center_z, angle=angle_z,
-                                        color=draw_agent_color, top_angle=36)
-
     def display_result(self, game_result):
-        text_surface = self.result_surfaces.get(game_result)
-        if text_surface is None:
-            return
-        text_rect = text_surface.get_rect(center=(self.screen.get_width() / 2, self.screen.get_height() / 2))
-        self.screen.blit(text_surface, text_rect)
+        message=self.result_surfaces.get(game_result)
+        if message is not None:
+            self.screen.blit(message,message.get_rect(center=(self.screen.get_width()/2,self.screen.get_height()/2)))
 
     def wait_for_result(self, game_result):
-        """Compatibility no-op: the application owns timing and event polling."""
         return None
 
     @staticmethod
     def close_window():
-        """Close the pygame window."""
         pygame.display.quit()

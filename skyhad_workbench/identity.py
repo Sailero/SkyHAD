@@ -73,7 +73,7 @@ def source_identity(root=None):
     for name, path in sorted(paths):
         content = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n")
         source[name] = hashlib.sha256(content.encode()).hexdigest()
-        if name.startswith("had_env/render/") or (
+        if name.startswith("had_env/render/") or name == 'had_env/_rendering.py' or (
             name.startswith("skyhad_workbench/") and path.name in VIEWER_FILES
         ):
             viewer[name] = source[name]

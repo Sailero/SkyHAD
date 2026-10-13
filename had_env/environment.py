@@ -47,7 +47,8 @@ class HADParallelEnv(ParallelEnv):
     control explicitly selects spatial_dim=3 for 27 actions or a 3-vector.
     """
 
-    metadata = {"name": "had_defense_v1", "render_modes": ["human", "rgb_array"],
+    from had_env._rendering import has_native_renderer as _has_renderer
+    metadata = {"name": "had_defense_v1", "render_modes": ["human", "rgb_array"] if _has_renderer() else [],
                 "render_fps": 30, "is_parallelizable": True}
 
     def __init__(self, scenario=None, *, max_cycles=100, continuous=False,
@@ -56,6 +57,8 @@ class HADParallelEnv(ParallelEnv):
             raise ValueError("max_cycles must be a positive integer")
         if render_mode not in (None, "human", "rgb_array"):
             raise ValueError("render_mode must be None, 'human', or 'rgb_array'")
+        if render_mode is not None and not self.metadata['render_modes']:
+            raise ValueError('The core edition supports only render_mode=None; use the full main branch for visualization.')
         if not isinstance(continuous, bool):
             raise ValueError("continuous must be a boolean")
         self.scenario = scenario or Scenario()

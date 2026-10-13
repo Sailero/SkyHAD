@@ -65,15 +65,18 @@ reward_boundary = 0.05
 reward_episode = 10
 OBS_ENTITY_DIM = 11  # Position 3, velocity 3, health, alive and side flags 3.
 
-# Optional native renderer: pixel dimensions and RGBA colours.
-ScreenLength = 800
-ScreenWidth = ScreenLength * (AeroPoint[1][1] - AeroPoint[1][0]) / (AeroPoint[0][1] - AeroPoint[0][0])
-ScreenHeight = int(ScreenLength * (AeroPoint[2][1] - AeroPoint[2][0]) / (AeroPoint[0][1] - AeroPoint[0][0]) * 0.5)
-SurfaceColor = (238, 243, 248, 255)
-BorderColor = (130, 149, 170, 255)
-RedColor = (158, 41, 50, 255)
-BlueColor = (24, 126, 183, 255)
-DeadAgentColor = (104, 115, 131, 180)
+# Historical presentation attribute imports remain available on the full edition.
+_DISPLAY_NAMES = frozenset(('ScreenLength', 'ScreenWidth', 'ScreenHeight', 'SurfaceColor',
+                          'BorderColor', 'RedColor', 'BlueColor', 'DeadAgentColor'))
+
+
+def __getattr__(name):
+    if name in _DISPLAY_NAMES:
+        from had_env._rendering import has_native_renderer
+        if has_native_renderer():
+            from had_env.render import style
+            return getattr(style, name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 @dataclass(frozen=True)

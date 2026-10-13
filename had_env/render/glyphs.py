@@ -117,13 +117,17 @@ def aircraft_geometry(entity, projection="xy", size=12., center=(0., 0.)):
     transform = lambda points: rotate_points(points, angle, size, center)
     nose = None if head_on else transform(((1.4 if fixedwing else 1.15, 0.),))[0]
     indicators = {}
+    cue_arrows = []
     for key, value, offset in (("bank", cues["bank"], (-6., 21.)),
                                ("pitch", cues["nose_up_pitch"], (18., 21.))):
         if value is not None:
+            cue_angle = value if key == 'bank' else -value
             indicators[key] = rotate_points(((-5., 0.), (5., 0.)),
-                                            value if key == "bank" else -value,
+                                            cue_angle,
                                             center=(center[0]+offset[0], center[1]+offset[1]))
+            cue_arrows.append(rotate_points(((5., 0.), (1., -2.5), (1., 2.5)), cue_angle,
+                              center=(center[0]+offset[0], center[1]+offset[1])))
     hidden = forward[2] if projection == "xy" else -forward[1]
-    return dict(polygons=[transform(p) for p in polygons], lines=[transform(p) for p in lines],
+    return dict(polygons=[transform(p) for p in polygons] + cue_arrows, lines=[transform(p) for p in lines],
                 circles=[(transform((p,))[0], radius*size) for p, radius in circles],
                 nose=nose, head_on=head_on, toward=hidden > 0, attitude=cues, indicators=indicators)

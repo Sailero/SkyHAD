@@ -134,12 +134,19 @@ def _agent_pixels(row):
     return pygame.surfarray.array3d(surface).copy()
 
 
+def _xz_pixels(pixels):
+    from had_env.render.render import DisplayPlayer
+    player = DisplayPlayer(pygame.Surface((800, 1000), pygame.SRCALPHA))
+    rect = player.panel_rects['xz']
+    return pixels[:, rect.top:rect.bottom]
+
+
 @pytest.mark.parametrize("model", ["particle", "UAV_fixedwing", "UAV_quadrotor"])
 def test_native_altitude_increases_upward(model):
     row = dict(position=[.5, .5, .2], velocity=[1, 0, 0], type="Attack", alive=True,
                env_agent_type=model, attitude=[1., 0., 0., 0.])
-    low = _agent_pixels(row)[:, 800:]
-    high = _agent_pixels({**row, "position": [.5, .5, .8]})[:, 800:]
+    low = _xz_pixels(_agent_pixels(row))
+    high = _xz_pixels(_agent_pixels({**row, "position": [.5, .5, .8]}))
     assert np.nonzero(high.any(axis=2))[1].mean() < np.nonzero(low.any(axis=2))[1].mean()
 
 
@@ -152,7 +159,7 @@ def test_native_target_altitude_increases_upward():
     for altitude in (.2, .8):
         surface.fill((0, 0, 0, 0))
         player.draw_targets(surface, [dict(position=[.5, .5, altitude], alive=True)])
-        pixels = pygame.surfarray.array3d(surface)[:, 800:]
+        pixels = _xz_pixels(pygame.surfarray.array3d(surface))
         heights.append(np.nonzero(pixels.any(axis=2))[1].mean())
     assert heights[1] < heights[0]
 
