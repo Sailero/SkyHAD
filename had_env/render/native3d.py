@@ -5,6 +5,9 @@ requires ``had-env[viewer3d]`` and a usable native OpenGL display.
 """
 from __future__ import annotations
 
+import os
+import sys
+
 import numpy as np
 
 from had_env.config import Interval
@@ -45,6 +48,15 @@ class Native3DRenderer:
     """One lightweight scene window; no stepping, controls or recording state."""
 
     def __init__(self, simulation):
+        qt_platform = os.environ.get('QT_QPA_PLATFORM', '').split(':', 1)[0].strip().lower()
+        if qt_platform in {'offscreen', 'minimal'}:
+            raise RuntimeError(
+                f'Native 3D OpenGL rendering is unsupported with QT_QPA_PLATFORM={qt_platform}. '
+                'Use the 2D projections renderer or a graphics-enabled display.')
+        if sys.platform.startswith('linux') and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            raise RuntimeError(
+                'Native 3D OpenGL rendering requires a Linux display (DISPLAY or WAYLAND_DISPLAY). '
+                'Use the 2D projections renderer or run with an X/Wayland display.')
         self.simulation = simulation
         self._closed = False
         self._shown = False

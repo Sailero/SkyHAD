@@ -33,6 +33,32 @@ def test_native_adapter_import_does_not_load_graphics_packages():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize('platform', ['offscreen', 'minimal'])
+def test_unsupported_qt_platform_fails_before_loading_graphics(platform):
+    result = subprocess.run([sys.executable, '-c',
+        "import os, sys; from had_env.render.native3d import Native3DRenderer\n"
+        f"os.environ['QT_QPA_PLATFORM'] = {platform!r}\n"
+        "try:\n Native3DRenderer(object())\n"
+        "except RuntimeError as exc:\n assert 'OpenGL' in str(exc) and '2D' in str(exc)\n"
+        "else:\n raise AssertionError('Unsupported Qt platform accepted')\n"
+        "assert not any(k.startswith(('PySide6', 'vispy')) for k in sys.modules)"],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_linux_without_display_fails_before_loading_graphics():
+    result = subprocess.run([sys.executable, '-c',
+        "import os, sys; from had_env.render.native3d import Native3DRenderer\n"
+        "sys.platform = 'linux'\n"
+        "for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'QT_QPA_PLATFORM'):\n os.environ.pop(key, None)\n"
+        "try:\n Native3DRenderer(object())\n"
+        "except RuntimeError as exc:\n assert 'display' in str(exc).lower() and '2D' in str(exc)\n"
+        "else:\n raise AssertionError('Headless Linux accepted')\n"
+        "assert not any(k.startswith(('PySide6', 'vispy')) for k in sys.modules)"],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_simulation_frame_uses_raw_truth_global_ids_and_damage_without_mutation():
     sim = simulation()
     try:

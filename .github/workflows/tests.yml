@@ -131,9 +131,59 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xauth libegl1 libgl1-mesa-dri libxcb-cursor0 libxkbcommon-x11-0
+      - name: Install Qt XCB and software OpenGL runtime
+        run: |
+          sudo apt-get update
+          # Runtime libraries from https://doc.qt.io/qt-6/linux-requirements.html
+          # Qt wheels supply Qt itself; no Qt development packages are needed.
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libegl1 libgl1-mesa-dri libxcb-cursor0 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
       - run: python -m pip install -e ".[render,viewer3d,test]"
-      - run: xvfb-run -a python -B -m pytest tests/test_scene3d.py tests/test_native3d.py tests/test_native_view_modes.py -q -p no:cacheprovider
+      - name: Verify Qt XCB shared library closure
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          from PySide6.QtCore import QLibraryInfo, qVersion
+
+          plugins = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))
+          print(f'Qt {qVersion()} plugins: {plugins}', flush=True)
+          for relative in ('platforms/libqxcb.so', 'xcbglintegrations/libqxcb-glx-integration.so'):
+              plugin = plugins / relative
+              assert plugin.is_file(), f'Qt runtime plugin missing: {plugin}'
+              result = subprocess.run(['ldd', str(plugin)], capture_output=True, text=True)
+              print(result.stdout, end='', flush=True)
+              print(result.stderr, end='', flush=True)
+              result.check_returncode()
+              missing = [line for line in result.stdout.splitlines() if 'not found' in line]
+              if missing:
+                  raise RuntimeError(f'Unresolved Qt runtime libraries: {missing}')
+      - name: Probe XCB QApplication and OpenGL before pytest capture
+        env:
+          QT_DEBUG_PLUGINS: '1'
+        run: |
+          xvfb-run -a python -u - <<'PY'
+          import os
+          from PySide6.QtCore import qVersion
+          from PySide6.QtGui import QOffscreenSurface, QOpenGLContext
+          from PySide6.QtWidgets import QApplication
+
+          print(f'Qt {qVersion()} platform={os.environ["QT_QPA_PLATFORM"]} DISPLAY={os.environ.get("DISPLAY")}', flush=True)
+          app = QApplication([])
+          assert app.platformName() == 'xcb', app.platformName()
+          surface = QOffscreenSurface()
+          surface.create()
+          context = QOpenGLContext()
+          assert context.create(), 'Qt could not create an OpenGL context'
+          assert context.makeCurrent(surface), 'Qt could not make its OpenGL context current'
+          version = context.format()
+          print(f'XCB QApplication and OpenGL {version.majorVersion()}.{version.minorVersion()} context: OK', flush=True)
+          context.doneCurrent()
+          surface.destroy()
+          app.quit()
+          PY
+      - run: xvfb-run -a python -B -m pytest tests/test_scene3d.py tests/test_native3d.py tests/test_native_view_modes.py -q -s -p no:cacheprovider
 
   editions:
     needs: detect

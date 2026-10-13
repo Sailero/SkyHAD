@@ -33,6 +33,14 @@ python examples/rendering.py
 
 Activate with `source .venv/bin/activate` on Linux/macOS or `.venv\Scripts\Activate.ps1` in Windows PowerShell. Install only `.` for headless use. The base dependencies are NumPy, SciPy, Gymnasium and PettingZoo. Core has only the optional `render` and `test` extras. Full adds `viewer3d` and `record`; the old `viewer` extra and desktop scripts have been removed.
 
+Ubuntu full 3D sessions also need the [Qt XCB runtime libraries](https://doc.qt.io/qt-6/linux-requirements.html) and a usable OpenGL context:
+
+```bash
+sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+```
+
+CI adds Xvfb and software Mesa, checks the installed Qt plugin's shared-library closure, and probes QApplication/OpenGL before its required real-GL tests. Core needs none of these Qt prerequisites.
+
 ## Rendering from the environment
 
 Create `make_env(render_mode="human")`; the normal environment lifecycle renders the default 2D projections. Both editions accept `env.set_view_mode("projections")`. Only full accepts `env.set_view_mode("3d")`, and missing full-only modules/dependencies produce actionable guidance. `render_mode="rgb_array"` returns the selected view through `env.render()`. Switching view mode never advances physics or changes the action/observation contract.
