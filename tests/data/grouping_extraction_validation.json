@@ -1,0 +1,40 @@
+{
+  "golden_cases": [
+    {
+      "policy_name": "rule",
+      "roster": [
+        4,
+        4
+      ],
+      "seed": 3,
+      "sha256": "998950875aa000f8c97128623f4ddb5ab34c4221b7a5511275967cdfcf5770e8"
+    },
+    {
+      "policy_name": "grand",
+      "roster": [
+        8,
+        8
+      ],
+      "seed": 72,
+      "sha256": "92b782f40bfbe96b01a95cda928498808ae85cd2ffe5982da4b33df5e571717b"
+    },
+    {
+      "policy_name": "static_rule",
+      "roster": [
+        16,
+        8
+      ],
+      "seed": 3,
+      "sha256": "141aa7d6f9db3592f17e431f5a53f193f7d570630548dc892accb91bebc138b8"
+    },
+    {
+      "policy_name": "random",
+      "roster": [
+        32,
+        32
+      ],
+      "seed": 72,
+      "sha256": "d8757d88ab221578b1c62f732e9b5d9263694fdedf37d56c5a060650f22f50db"
+    }
+  ]
+}

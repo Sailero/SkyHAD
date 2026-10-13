@@ -1,0 +1,234 @@
+name: tests
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, core]
+permissions:
+  contents: read
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      edition: ${{ steps.detect.outputs.edition }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Detect validated edition layout
+        id: detect
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          root = Path.cwd()
+          workbench = (root / 'skyhad_workbench').is_dir()
+          renderer = (root / 'had_env/render/backend.py').is_file()
+          manifest_path = root / 'edition-manifest.json'
+          assert not workbench, 'Desktop workbench is excluded from both editions'
+          assert renderer, 'Both editions require the minimal 2D renderer'
+          if not manifest_path.exists():
+              edition = 'full'
+          elif manifest_path.is_file():
+              manifest = json.loads(manifest_path.read_text())
+              assert manifest['edition'] == 'core'
+              assert manifest_path.read_bytes() == (root / 'had_env/edition_manifest.json').read_bytes()
+              for name in ('scene3d.py', 'native3d.py', 'video.py'):
+                  assert not (root / 'had_env/render' / name).exists()
+              assert (root / 'had_env/resources/target.png').is_file()
+              edition = 'core'
+          else:
+              raise RuntimeError('Invalid mixed full/core edition layout')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'edition={edition}\n')
+  tests:
+    needs: detect
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.12']
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+      MPLBACKEND: Agg
+      PYGAME_HIDE_SUPPORT_PROMPT: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Linux Qt runtime prerequisite
+        if: needs.detect.outputs.edition == 'full' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1
+      - run: python -m pip install --upgrade pip "setuptools>=77" wheel
+      - run: python -m pip wheel . --no-deps --wheel-dir "${{ runner.temp }}/skyhad-wheels"
+      - name: Fresh headless installed-wheel smoke
+        if: needs.detect.outputs.edition == 'full'
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path(os.environ['RUNNER_TEMP'])
+          runtime = root / 'skyhad-headless'
+          subprocess.run([sys.executable, '-m', 'venv', str(runtime)], check=True)
+          python = runtime / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+          wheel, = (root / 'skyhad-wheels').glob('*.whl')
+          subprocess.run([str(python), '-m', 'pip', 'install', str(wheel)], check=True)
+          code = '''
+          import importlib.util
+          from importlib.metadata import distribution
+          from pathlib import Path
+          import sys
+          import had_env
+          assert Path(had_env.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          assert importlib.util.find_spec('skyhad_workbench') is None
+          assert all(importlib.util.find_spec(name) is None for name in ('pygame', 'PySide6', 'matplotlib', 'torch'))
+          package = distribution('had-env')
+          assert package.version == had_env.__version__
+          assert package.metadata['License-Expression'] == 'MIT'
+          license_file, = [p for p in package.files if str(p).endswith('.dist-info/licenses/LICENSE')]
+          assert 'Copyright (c) 2026 Saileron' in package.locate_file(license_file).read_text()
+          assert not package.entry_points
+          env = had_env.make_env(red_count=1, blue_count=1, max_cycles=1)
+          try:
+              env.reset(seed=11)
+              result = env.step({a: 0 for a in env.agents})
+              assert len(result) == 5
+              info = next(iter(result[-1].values()))
+              assert info['global_terminated'] or info['global_truncated']
+          finally:
+              env.close()
+          assert not any(name in sys.modules for name in ('pygame', 'PySide6', 'matplotlib', 'torch'))
+          print('headless installed wheel and MIT license: OK')
+          '''
+          subprocess.run([str(python), '-I', '-B', '-c', code], cwd=root, check=True)
+      - name: Install full viewer test dependencies
+        if: needs.detect.outputs.edition == 'full'
+        run: python -m pip install -e ".[render,viewer3d,record,test]"
+      - name: Install minimal core test dependencies
+        if: needs.detect.outputs.edition == 'core'
+        run: python -m pip install -e ".[test]"
+      # The exact installed-wheel/parity integration runs once in the editions
+      # job; each matrix cell retains all other physics/API/render regressions.
+      - run: python -B -m pytest -q -p no:cacheprovider -k 'not test_built_core_installs_cleanly_and_matches_full_physics'
+
+  usable-gl:
+    needs: detect
+    if: needs.detect.outputs.edition == 'full'
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      SKYHAD_REQUIRE_3D: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install Qt XCB and software OpenGL runtime
+        run: |
+          sudo apt-get update
+          # Runtime libraries from https://doc.qt.io/qt-6/linux-requirements.html
+          # Qt wheels supply Qt itself; no Qt development packages are needed.
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libegl1 libgl1-mesa-dri libxcb-cursor0 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
+            libxcb-shape0 libxcb-glx0
+      - run: python -m pip install -e ".[render,viewer3d,test]"
+      - name: Verify Qt XCB shared library closure
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          from PySide6.QtCore import QLibraryInfo, qVersion
+
+          plugins = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))
+          print(f'Qt {qVersion()} plugins: {plugins}', flush=True)
+          for relative in ('platforms/libqxcb.so', 'xcbglintegrations/libqxcb-glx-integration.so'):
+              plugin = plugins / relative
+              assert plugin.is_file(), f'Qt runtime plugin missing: {plugin}'
+              result = subprocess.run(['ldd', str(plugin)], capture_output=True, text=True)
+              print(result.stdout, end='', flush=True)
+              print(result.stderr, end='', flush=True)
+              result.check_returncode()
+              missing = [line for line in result.stdout.splitlines() if 'not found' in line]
+              if missing:
+                  raise RuntimeError(f'Unresolved Qt runtime libraries: {missing}')
+      - name: Probe XCB QApplication and OpenGL before pytest capture
+        env:
+          QT_DEBUG_PLUGINS: '1'
+        run: |
+          xvfb-run -a python -u - <<'PY'
+          import os
+          from PySide6.QtCore import qVersion
+          from PySide6.QtGui import QOffscreenSurface, QOpenGLContext
+          from PySide6.QtWidgets import QApplication
+
+          print(f'Qt {qVersion()} platform={os.environ["QT_QPA_PLATFORM"]} DISPLAY={os.environ.get("DISPLAY")}', flush=True)
+          app = QApplication([])
+          assert app.platformName() == 'xcb', app.platformName()
+          surface = QOffscreenSurface()
+          surface.create()
+          context = QOpenGLContext()
+          assert context.create(), 'Qt could not create an OpenGL context'
+          assert context.makeCurrent(surface), 'Qt could not make its OpenGL context current'
+          version = context.format()
+          print(f'XCB QApplication and OpenGL {version.majorVersion()}.{version.minorVersion()} context: OK', flush=True)
+          context.doneCurrent()
+          surface.destroy()
+          app.quit()
+          PY
+      - run: xvfb-run -a python -B -m pytest tests/test_scene3d.py tests/test_native3d.py tests/test_native_view_modes.py -q -s -p no:cacheprovider
+
+  editions:
+    needs: detect
+    if: needs.detect.outputs.edition == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip "setuptools>=77" wheel
+      - run: python tools/verify_editions.py --source . --ref "${{ github.sha }}" --output "${{ runner.temp }}/edition-validation"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-core
+          path: ${{ runner.temp }}/edition-validation/core-source
+          include-hidden-files: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edition-validation-report
+          path: ${{ runner.temp }}/edition-validation/validation-report.json
+
+  publish-core:
+    needs: [detect, tests, usable-gl, editions]
+    if: always() && needs.detect.outputs.edition == 'full' && needs.detect.result == 'success' && needs.tests.result == 'success' && needs.usable-gl.result == 'success' && needs.editions.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Sailero/SkyHAD'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: skyhad-core-publisher
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-core
+          path: ${{ runner.temp }}/validated-core
+      - run: python tools/publish_core.py --source . --generated "${{ runner.temp }}/validated-core" --source-sha "${{ github.sha }}"
