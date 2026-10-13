@@ -36,7 +36,7 @@ Activate with `source .venv/bin/activate` on Linux/macOS or `.venv\Scripts\Activ
 Ubuntu full 3D sessions also need the [Qt XCB runtime libraries](https://doc.qt.io/qt-6/linux-requirements.html) and a usable OpenGL context:
 
 ```bash
-sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-glx0
 ```
 
 CI adds Xvfb and software Mesa, checks the installed Qt plugin's shared-library closure, and probes QApplication/OpenGL before its required real-GL tests. Core needs none of these Qt prerequisites.
@@ -61,6 +61,8 @@ Output must be new/empty and outside the source checkout; existing files are nev
 ## Shared CI and publishing
 
 Main and core use the exact same `.github/workflows/tests.yml` path and contents. Edition detection requires no workbench and a 2D backend in either edition; core must additionally have its matching manifests and omit 3D/video modules. Core runs the Ubuntu/Windows Python 3.10/3.12 matrix with base/test dependencies. Full adds optional 2D/3D/video test dependencies, usable Linux OpenGL and installed-edition validation. Optional Pygame checks skip in the base-only core matrix; main's validator also checks installed core 2D rendering separately.
+
+The installed-wheel/96-cell parity integration runs once in the dedicated editions job. The four OS/Python matrix cells run all other tests; local default `pytest` still includes the integration test. Publication requires the dedicated job and every matrix cell to pass.
 
 The core publisher requires all full validation jobs and canonical main push detection. It checks artifact hashes and canonical workflow bytes against the exact tested full Git commit before any Git mutation, verifies main is still current, serializes updates and uses ordinary fast-forward-only pushes. Generated core commits are not merged back into main.
 

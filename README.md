@@ -21,7 +21,7 @@ python examples/quickstart.py
 `render` adds Pygame for 2D; `viewer3d` adds PySide6 and VisPy; `record` adds ImageIO and its FFmpeg integration. Install only `.` for headless RL, or `.[render]` for 2D. Linux Qt/3D sessions need a usable OpenGL context and Qt's XCB runtime libraries. On Ubuntu:
 
 ```bash
-sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1
+sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-glx0
 ```
 
 ## Environment and rendering
