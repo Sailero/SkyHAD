@@ -1,5 +1,0 @@
-include edition-manifest.json
-recursive-include docs *.md *.tex *.pdf
-recursive-include examples *.py
-recursive-include tests *.py *.json
-global-exclude *.py[cod]

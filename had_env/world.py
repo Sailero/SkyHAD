@@ -5,7 +5,7 @@ from had_env.geometry import (
     distance,
     attack_intensity_ratio,
     disturb_intensity_ratio,
-    closest_segment_distance,
+    swept_separations,
     WorldKinematics,
 )
 from had_env.config import CORE_VERSION, PHYSICS_PROTOCOL
@@ -143,65 +143,12 @@ class World:
 
 
     def step(self, flying_action_n):
-        if self.dynamics is not None:
-            # Predict all synchronized paths before collisions/fire mutate health.
-            paths = {}
-            for agent, command in zip(self.agents, flying_action_n):
-                if agent.Health <= 0:
-                    continue
-                candidate, path = self.dynamics.advance(agent.rigid_state, command,
-                                                        self.env_agent_action_type, dt=Interval)
-                clipped_path = np.clip(path, self.world_bounds[:, 0], self.world_bounds[:, 1])
-                axes = []
-                for axis in range(3):
-                    if candidate[axis] > self.world_bounds[axis, 1]:
-                        candidate[axis] = self.world_bounds[axis, 1]
-                        candidate[3+axis] = min(0., candidate[3+axis])
-                        axes.append((axis, 1))
-                    elif candidate[axis] < self.world_bounds[axis, 0]:
-                        candidate[axis] = self.world_bounds[axis, 0]
-                        candidate[3+axis] = max(0., candidate[3+axis])
-                        axes.append((axis, -1))
-                agent._next_rigid_state = candidate
-                agent._next_clamped_axes = axes
-                paths[agent.Id] = clipped_path
+        # Predict all synchronized paths before collisions/fire mutate health.
+        paths = self._predict_rigid_motion(flying_action_n) if self.dynamics is not None else None
         self.physics_step_count += 1
         self.last_physics_events = []
         self.boundary_clips = 0
-        # Swept collision on the upcoming displacement. Skip agents already
-        # killed earlier in this same i-major/j-minor pass.
-        for i, first in enumerate(self.alive_agents):
-            if first.Health <= 0:
-                continue
-            p1 = np.asarray(first.position, dtype=np.float64)
-            v1 = np.asarray(first.velocity, dtype=np.float64)
-            q1 = p1 + v1 * Interval
-            for j in range(i):
-                second = self.alive_agents[j]
-                if second.Health <= 0:
-                    continue
-                p2 = np.asarray(second.position, dtype=np.float64)
-                v2 = np.asarray(second.velocity, dtype=np.float64)
-                if self.dynamics is None and float(np.linalg.norm(p1 - p2)) > self.collision_distance + float(np.linalg.norm(v1 - v2)) * Interval:
-                    continue
-                q2 = p2 + v2 * Interval
-                if self.dynamics is None:
-                    separation = closest_segment_distance(p1, q1, p2, q2)
-                else:
-                    path1, path2 = paths[first.Id], paths[second.Id]
-                    separation = min(closest_segment_distance(path1[k], path1[k+1], path2[k], path2[k+1])
-                                     for k in range(len(path1)-1))
-                if separation <= self.collision_distance:
-                    if self.record_events:
-                        for source, target in ((first, second), (second, first)):
-                            if target.Health > 0:
-                                self._record_physics_event(
-                                    "collision", source, target, target.Health, 0,
-                                    target.Health, separation,
-                                )
-                    first.Health = 0
-                    second.Health = 0
-
+        self._resolve_collisions(paths)
         self._apply_automatic_fire(flying_action_n)
 
         snapshot = WorldKinematics(self.entities, self._color_code, self._type_code,
@@ -215,6 +162,65 @@ class World:
                 self._record_damage_events(agent, snapshot, health_before)
 
         self.update_alive_agents()
+
+    def _predict_rigid_motion(self, flying_action_n):
+        """Integrate every living aircraft together; return world-clipped substep paths by Id."""
+        living = [index for index, agent in enumerate(self.agents) if agent.Health > 0]
+        if not living:
+            return {}
+        states = np.array([self.agents[index].rigid_state for index in living])
+        commands = np.array([flying_action_n[index] for index in living], dtype=np.float64)
+        final, paths = self.dynamics.advance(states, commands, self.env_agent_action_type, dt=Interval)
+        low, high = self.world_bounds[:, 0], self.world_bounds[:, 1]
+        result = {}
+        for row, index in enumerate(living):
+            agent, candidate, axes = self.agents[index], final[row].copy(), []
+            for axis in range(3):
+                if candidate[axis] > high[axis]:
+                    candidate[axis] = high[axis]
+                    candidate[3+axis] = min(0., candidate[3+axis])
+                    axes.append((axis, 1))
+                elif candidate[axis] < low[axis]:
+                    candidate[axis] = low[axis]
+                    candidate[3+axis] = max(0., candidate[3+axis])
+                    axes.append((axis, -1))
+            agent._next_rigid_state = candidate
+            agent._next_clamped_axes = axes
+            result[agent.Id] = np.clip(paths[row], low, high)
+        return result
+
+    def _resolve_collisions(self, paths):
+        """Kill both aircraft of every pair whose synchronized swept paths come within reach.
+
+        Particles sweep the straight segment p -> p + v*dt; rigid bodies use their
+        clipped RK4 substep paths. The i-major/j-minor pass skips agents already
+        killed, but an outer agent killed within its inner sweep can still collide
+        with a later inner agent.
+        """
+        movers = [agent for agent in self.alive_agents if agent.Health > 0]
+        if len(movers) < 2:
+            return
+        if paths is None:
+            start = np.array([agent.position for agent in movers], dtype=np.float64)
+            velocity = np.array([agent.velocity for agent in movers], dtype=np.float64)
+            tracks = np.stack([start, start + velocity * Interval], axis=1)
+        else:
+            tracks = np.stack([paths[agent.Id] for agent in movers])
+        separation = swept_separations(tracks)
+        for i, first in enumerate(movers):
+            if first.Health <= 0:
+                continue
+            for j in range(i):
+                second = movers[j]
+                if second.Health <= 0 or separation[i, j] > self.collision_distance:
+                    continue
+                if self.record_events:
+                    for source, target in ((first, second), (second, first)):
+                        if target.Health > 0:
+                            self._record_physics_event("collision", source, target, target.Health, 0,
+                                                       target.Health, separation[i, j])
+                first.Health = 0
+                second.Health = 0
 
     def _apply_automatic_fire(self, flying_action_n):
         positions = np.asarray([entity.position for entity in self.entities], dtype=np.float64)

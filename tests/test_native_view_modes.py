@@ -1,4 +1,4 @@
-"""Small environment render APIs, with no workbench or graphics required."""
+"""View-mode routing through every interface, with a fake 3D renderer (no graphics required)."""
 import copy
 import sys
 import types
@@ -34,8 +34,6 @@ def physical(env):
 
 @pytest.fixture
 def fake_3d(monkeypatch):
-    import had_env.simulation as simulation
-    monkeypatch.setattr(simulation, 'has_3d_renderer', lambda: True)
     monkeypatch.setitem(sys.modules, 'had_env.render.native3d', types.SimpleNamespace(Native3DRenderer=Fake3DRenderer))
 
 
@@ -70,15 +68,17 @@ def test_each_interface_routes_3d_and_switches_without_mutating_state(api, fake_
         env.close()
 
 
-def test_absent_full_3d_is_explicit_and_keeps_basic_rendering(monkeypatch):
-    import had_env.simulation as simulation
-    monkeypatch.setattr(simulation, 'has_3d_renderer', lambda: False)
-    env = make_env(env_agent_type='UAV_quadrotor')
+def test_missing_3d_packages_give_install_guidance(monkeypatch):
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    monkeypatch.setenv('DISPLAY', ':0')
+    for name in ('PySide6', 'PySide6.QtWidgets'):
+        monkeypatch.setitem(sys.modules, name, None)
+    env = make_env(env_agent_type='UAV_quadrotor', render_mode='rgb_array')
     try:
-        env.set_view_mode('projections')
-        with pytest.raises(ValueError, match='full.*main'):
-            env.set_view_mode('3d')
-        assert env.simulation._view_mode == 'projections'
+        env.reset(seed=3)
+        env.set_view_mode('3d')
+        with pytest.raises(RuntimeError, match=r'\[viewer3d\]'):
+            env.render()
         assert env.metadata['render_modes'] == ['human', 'rgb_array']
     finally:
         env.close()

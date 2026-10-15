@@ -5,6 +5,7 @@ requires ``had-env[viewer3d]`` and a usable native OpenGL display.
 """
 from __future__ import annotations
 
+from collections import deque
 import os
 import sys
 
@@ -15,13 +16,15 @@ from had_env.config import Interval
 
 def simulation_frame(simulation):
     """Copy current physical truth, preserving native global IDs and raw metres."""
+    from .backend import entity_labels
+    labels = entity_labels(simulation)
     entities = []
     for entity in simulation.entities:
         side = {'Red': 'red', 'Blue': 'blue', 'Entity': 'targets'}.get(entity.Color, str(entity.Color).lower())
         attitude = getattr(entity, 'attitude', None)
         rigid = getattr(entity, 'rigid_state', None)
         entities.append(dict(
-            side=side, id=entity.Id, entity_id=entity.Id, role=entity.Type,
+            side=side, id=entity.Id, entity_id=entity.Id, label=labels[entity.Id], role=entity.Type,
             position=np.asarray(entity.position, dtype=float).tolist(),
             velocity=np.asarray(entity.velocity, dtype=float).tolist(),
             health=float(entity.Health), max_health=float(entity.initial_health),
@@ -29,6 +32,7 @@ def simulation_frame(simulation):
             attitude=None if attitude is None else np.asarray(attitude, dtype=float).tolist(),
             rigid_state=None if rigid is None else np.asarray(rigid, dtype=float).tolist(),
             attack_range=float(simulation.attack_distance[-1]),
+            fire_range=float(simulation.fire_range) if entity.Color == 'Entity' else None,
             step_damage=float(entity.step_damage), cumulative_damage=float(entity.cumulative_damage),
         ))
     step = int(simulation.physics_step_count)
@@ -65,19 +69,20 @@ class Native3DRenderer:
             from PySide6.QtWidgets import QApplication
             from .scene3d import Battlefield3DView
         except ImportError as exc:
-            raise RuntimeError('Native 3D rendering requires had-env[viewer3d] (PySide6 and VisPy).') from exc
+            raise RuntimeError('3D rendering requires PySide6 and VisPy: pip install -e ".[viewer3d]"') from exc
         existing = QApplication.instance()
         if existing is not None and not isinstance(existing, QApplication):
             raise RuntimeError('Native 3D rendering requires a QApplication with QWidget/OpenGL support.')
         self._app = existing or QApplication([])
         if existing is None:
             self._app.setQuitOnLastWindowClosed(False)
+        self.history = deque(maxlen=20)
         try:
             self.view = Battlefield3DView()
             self.view.resize(1000, 700)
-            self.view.setWindowTitle('SkyHAD · 3D environment')
-            self.view.set_layers(dict(labels=True, trails=False, groups=False,
-                                      assignments=False, ranges=False, velocities=True))
+            self.view.setWindowTitle('SkyHAD · 3D')
+            self.view.set_layers(dict(labels=True, trails=True, groups=False, assignments=False,
+                                      ranges=False, velocities=True, ground=True))
             frame = simulation_frame(simulation)
             self.view.set_world_bounds((), metadata=frame['metadata'], bounds=simulation.world_bounds)
             self.view.set_frame(frame)
@@ -100,8 +105,14 @@ class Native3DRenderer:
             self.close()
             return False
         frame = simulation_frame(self.simulation)
+        if self.history and frame['step'] <= self.history[-1]['step']:
+            if frame['step'] < self.history[-1]['step'] or frame['step'] == 0:
+                self.history.clear()
+            else:
+                self.history.pop()
+        self.history.append(frame)
         self.metadata = frame['metadata']
-        self.view.set_frame(frame)
+        self.view.set_frame(frame, self.history)
         if not self._shown:
             self.view.show()
             self._shown = True

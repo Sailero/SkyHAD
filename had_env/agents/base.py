@@ -91,24 +91,6 @@ class Entity:
     def get_position(self):
         return self.position
 
-    def get_status(self):
-        if self.Color == 'Red':
-            color = 1
-        elif self.Color == 'Blue':
-            color = 2
-        else:
-            color = 0
-
-        if self.Type == 'Attack':
-            ty = 1
-        elif self.Type == 'Disturb':
-            ty = 2
-        elif self.Type == 'Scout':
-            ty = 3
-        else:
-            ty = 0
-        return self.position + self.velocity #  + [self.Health]  # + [color, ty, self.Health]  # [p, v, c, t, h]
-
 
 class BaseAgent(Entity):
     def __init__(self, color, id_, render_id):

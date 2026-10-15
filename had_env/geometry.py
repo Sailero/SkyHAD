@@ -1,4 +1,3 @@
-from scipy.stats import norm
 from scipy.spatial.transform import Rotation
 from had_env.config import (
     AeroPoint,
@@ -100,11 +99,15 @@ def within_sector_area(position3d1, position3d2, velocity3d, AngleMax, DistMax):
 
 
 def disturb_intensity_ratio(position3d1, position3d2, velocity3d, scene_scale=1.):
+    """Gaussian jamming strength inside the disturber's forward sector.
 
+    Distance is measured in units of the sector radius, so the strength falls
+    from 0.399 at point blank to 0.242 at the sector edge for GaussSigma = 1.
+    """
     dist = distance(position3d1, position3d2)
-    IsDisturbed = within_sector_area(position3d1, position3d2, velocity3d, DisturbAngleMax,
-                                     DisturbDistanceMax*scene_scale) * (dist > 1e-3)
-    return IsDisturbed * norm.pdf(dist/scene_scale, 0, GaussSigma)
+    radius = DisturbDistanceMax * scene_scale
+    IsDisturbed = within_sector_area(position3d1, position3d2, velocity3d, DisturbAngleMax, radius) * (dist > 1e-3)
+    return IsDisturbed * np.exp(-.5 * (dist / radius / GaussSigma) ** 2) / (GaussSigma * np.sqrt(2. * np.pi))
 
 
 def rotate_vector(p, axis, angle):
@@ -150,20 +153,29 @@ def rotate_restrict_velocity(v1, v2):
     return v2.tolist()
 
 
-def closest_segment_distance(p1, q1, p2, q2):
-    """Minimum simultaneous separation over one linear-motion step.
+def swept_separations(tracks):
+    """Pairwise minimum simultaneous distance between piecewise-linear tracks.
 
-    Both trajectories must use the same normalized time in [0, 1]. Allowing
-    independent segment parameters falsely collides agents arriving at the
-    same location at different times.
+    ``tracks`` has shape (agents, samples, 3) on a shared clock. Each segment
+    pair uses one common time parameter in [0, 1]; independent parameters would
+    falsely collide agents that pass the same point at different times.
+    Returns a symmetric (agents, agents) matrix with an infinite diagonal.
     """
-    p1, q1, p2, q2 = (np.asarray(item, dtype=np.float64) for item in (p1, q1, p2, q2))
-    relative_position = p1 - p2
-    relative_displacement = (q1 - p1) - (q2 - p2)
-    speed2 = float(np.dot(relative_displacement, relative_displacement))
-    time = (0.0 if speed2 <= 1e-12 else
-            float(np.clip(-np.dot(relative_position, relative_displacement) / speed2, 0.0, 1.0)))
-    return float(np.linalg.norm(relative_position + time * relative_displacement))
+    tracks = np.asarray(tracks, dtype=np.float64)
+    count = len(tracks)
+    first, second = np.tril_indices(count, -1)
+    start = tracks[:, :-1]
+    motion = tracks[:, 1:] - start
+    offset = start[first] - start[second]
+    relative = motion[first] - motion[second]
+    speed2 = np.einsum("pkd,pkd->pk", relative, relative)
+    moving = speed2 > 1e-12
+    time = np.where(moving, np.clip(-np.einsum("pkd,pkd->pk", offset, relative)
+                                    / np.where(moving, speed2, 1.), 0., 1.), 0.)
+    closest = offset + time[..., None] * relative
+    result = np.full((count, count), np.inf)
+    result[first, second] = result[second, first] = np.sqrt(np.einsum("pkd,pkd->pk", closest, closest)).min(axis=1)
+    return result
 
 
 def world_diagonal(bounds=None):
@@ -219,13 +231,11 @@ class WorldKinematics:
 
 
 def boundary_loss(position, boundary_range=100, bounds=None, scene_scale=1.):
+    """Scout/Disturb shaping penalty inside a ``boundary_range`` band along the x/y walls."""
     bounds = AeroPoint if bounds is None else bounds
-    if Boundary:
-        min_distance = min(min(abs(position[0] - bounds[0][0]), abs(position[0] - bounds[0][1])),
-                           min(abs(position[1] - bounds[1][0]), abs(position[1] - bounds[1][1])))
-        if min_distance < boundary_range*scene_scale:
-            return reward_boundary * np.exp(-min_distance/scene_scale)
-        else:
-            return 0
-    else:
+    if not Boundary:
         return 0
+    band = boundary_range * scene_scale
+    min_distance = min(min(abs(position[0] - bounds[0][0]), abs(position[0] - bounds[0][1])),
+                       min(abs(position[1] - bounds[1][0]), abs(position[1] - bounds[1][1])))
+    return reward_boundary * np.exp(-min_distance / band) if min_distance < band else 0

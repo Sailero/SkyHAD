@@ -142,7 +142,7 @@ def test_mpe_fixed_lists_flattened_obs_one_hot_and_done_semantics():
 
 
 def test_public_import_is_headless_without_research_dependencies():
-    code = "from make_env import make_env; import sys; e=make_env(); e.reset(seed=1); e.step({a:0 for a in e.agents}); e.close(); assert not any(k in sys.modules for k in ['torch','pygame','PySide6','open_score'])"
+    code = "from make_env import make_env; import sys; e=make_env(); e.reset(seed=1); e.step({a:0 for a in e.agents}); e.close(); assert not any(k in sys.modules for k in ['torch','pygame','PySide6','vispy'])"
     subprocess.run([sys.executable, "-B", "-c", code], cwd=Path(__file__).parents[1], check=True)
 
 

@@ -1,23 +1,22 @@
 """Ideal quadrotor using Lee, Leok and McClamroch's rigid-body model.
 
-Parameters and geometric attitude PD gains: arXiv:1003.2005v2, section VII
-https://arxiv.org/pdf/1003.2005v2 . Its down-axis convention is rotated to FLU.
-The ENU equations also match Faessler et al., RAL 2018, equations (1)-(4)
-with drag, gyroscopic rotor effects and motor lag set to zero:
-https://rpg.ifi.uzh.ch/docs/RAL18_Faessler.pdf . These are documented ideal
-assumptions, rather than an identified high-speed quadrotor model.
+Parameters and geometric attitude PD gains: arXiv:1003.2005v2, Section VII
+(J, m, d, c_tau_f, k_R, k_Omega). The paper's down-pointing body axis is
+rotated to FLU. The ENU equations also match Faessler et al., RA-L 2018,
+equations (1)-(4) with rotor drag, gyroscopic rotor effects and motor lag set
+to zero. These are documented ideal assumptions, not an identified model.
 
-Rotor order is front, right, rear, left. Inputs are thrust fractions [0,1].
-Maximum thrust/weight ratio 2.5 is a simulation choice, not a paper parameter.
+Rotor order is front, right, rear, left. Inputs are thrust fractions [0, 1].
+The maximum thrust/weight ratio 2.5 is a simulation choice.
 """
 import numpy as np
 
-from .control import clip_norm, quaternion_matrix, vee
-from .rigid_body import RigidBodyDynamics
+from .control import clip_norm, cross, vee
+from .rigid_body import RigidBodyDynamics, as_batch
 
 
 class QuadrotorDynamics(RigidBodyDynamics):
-    max_acceleration = acceleration_limit = 6.
+    acceleration_limit = 6.
     max_speed = 20.
     position_speed = 12.
     actuator_low = 0.
@@ -31,52 +30,55 @@ class QuadrotorDynamics(RigidBodyDynamics):
         super().__init__(4.34, np.diag([.0820, .0845, .1377]))
         self.max_rotor_thrust = self.thrust_to_weight * self.mass * self.gravity / 4.
         arm, yaw = self.arm_length, self.yaw_ratio
+        # Rows: collective thrust and FLU roll, pitch, yaw moments.
         self.allocation = np.array([[1., 1., 1., 1.], [0., -arm, 0., arm],
                                     [-arm, 0., arm, 0.], [yaw, -yaw, yaw, -yaw]])
         self.inverse_allocation = np.linalg.inv(self.allocation)
         self.hover_actuator = np.full(4, 1. / self.thrust_to_weight)
 
-    def forces_and_moments(self, state, actuator):
-        thrusts = np.clip(actuator, 0., 1.) * self.max_rotor_thrust
-        wrench = self.allocation @ thrusts
-        return np.array([0., 0., wrench[0]]), wrench[1:]
+    def _forces(self, states, actuators, rotation):
+        wrench = (np.clip(actuators, 0., 1.) * self.max_rotor_thrust) @ self.allocation.T
+        force = np.zeros((len(states), 3))
+        force[:, 2] = wrench[:, 0]
+        return force, wrench[:, 1:]
 
     def allocate(self, collective, moment):
-        """Preserve feasible collective, scaling torque uniformly into bounds."""
-        collective = float(np.clip(collective, 0., 4. * self.max_rotor_thrust))
-        baseline = collective / 4.
-        differential = self.inverse_allocation @ np.r_[0., moment]
-        scale = 1.
-        for value in differential:
-            if value > 0.:
-                scale = min(scale, (self.max_rotor_thrust-baseline) / value)
-            elif value < 0.:
-                scale = min(scale, -baseline / value)
-        return np.clip((baseline + scale*differential) / self.max_rotor_thrust, 0., 1.)
+        """Rotor fractions preserving feasible collective thrust; moments shrink uniformly to fit."""
+        moments, single = as_batch(moment, 3, "moment")
+        collective = np.clip(collective, 0., 4. * self.max_rotor_thrust)
+        baseline = np.reshape(collective, (-1, 1)) / 4.
+        differential = moments @ self.inverse_allocation[:, 1:].T
+        # Largest kappa in [0, 1] with 0 <= baseline + kappa * differential <= max thrust.
+        raising, lowering = differential > 0., differential < 0.
+        divisor = np.where(raising | lowering, differential, 1.)
+        limits = np.where(raising, (self.max_rotor_thrust - baseline) / divisor,
+                          np.where(lowering, -baseline / divisor, np.inf))
+        scale = np.minimum(1., limits.min(axis=1, keepdims=True))
+        actuators = np.clip((baseline + scale * differential) / self.max_rotor_thrust, 0., 1.)
+        return actuators[0] if single else actuators
 
-    def _acceleration_control(self, state, acceleration):
-        acceleration = clip_norm(acceleration, self.max_acceleration)
-        desired_force = self.mass * (acceleration + [0., 0., self.gravity])
-        z_axis = desired_force / np.linalg.norm(desired_force)
-        # Fixed world-east heading removes any hidden yaw target from snapshots.
-        y_axis = np.cross(z_axis, [1., 0., 0.])
-        y_axis /= np.linalg.norm(y_axis)
-        desired_rotation = np.column_stack([np.cross(y_axis, z_axis), y_axis, z_axis])
-        rotation = quaternion_matrix(state[6:10])
-        error = .5 * vee(desired_rotation.T @ rotation - rotation.T @ desired_rotation)
-        omega = state[10:13]
-        moment = (-self.attitude_gain*error - self.angular_velocity_gain*omega
-                  + np.cross(omega, self.inertia @ omega))
-        collective = desired_force @ rotation[:, 2]
+    def _acceleration_control(self, states, rotation, acceleration):
+        """Geometric attitude PD on SO(3) with a fixed east heading (no hidden yaw memory)."""
+        desired_force = self.mass * (clip_norm(acceleration, self.acceleration_limit) + [0., 0., self.gravity])
+        z_axis = desired_force / np.linalg.norm(desired_force, axis=1, keepdims=True)
+        y_axis = cross(z_axis, [1., 0., 0.])
+        y_axis /= np.linalg.norm(y_axis, axis=1, keepdims=True)
+        desired = np.stack([cross(y_axis, z_axis), y_axis, z_axis], axis=2)
+        relative = np.swapaxes(desired, 1, 2) @ rotation
+        error = .5 * vee(relative - np.swapaxes(relative, 1, 2))
+        omega = states[:, 10:13]
+        moment = (-self.attitude_gain * error - self.angular_velocity_gain * omega
+                  + cross(omega, omega @ self.inertia.T))
+        collective = np.einsum("ni,ni->n", desired_force, rotation[:, :, 2])
         return self.allocate(collective, moment)
 
-    def velocity_to_actuator(self, state, velocity):
-        velocity = clip_norm(velocity, self.max_speed)
-        return self._acceleration_control(state, 2. * (velocity - state[3:6]))
+    def _velocity_control(self, states, rotation, velocity):
+        acceleration = 2. * (clip_norm(velocity, self.max_speed) - states[:, 3:6])
+        return self._acceleration_control(states, rotation, acceleration)
 
-    def position_to_actuator(self, state, position):
-        velocity = clip_norm(.5 * (np.asarray(position) - state[:3]), self.position_speed)
-        return self.velocity_to_actuator(state, velocity)
+    def _position_control(self, states, rotation, position):
+        velocity = clip_norm(.5 * (position - states[:, :3]), self.position_speed)
+        return self._velocity_control(states, rotation, velocity)
 
 
 Quadrotor = QuadrotorDynamics

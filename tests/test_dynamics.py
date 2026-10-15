@@ -193,6 +193,38 @@ def test_all_extreme_physical_actuators_remain_finite_without_velocity_clamps(ki
         assert full[5] > model.max_speed
 
 
+@pytest.mark.parametrize("kind", ["quadrotor", "fixedwing"])
+@pytest.mark.parametrize("mode", ["acceleration", "position", "actuator"])
+def test_batched_integration_equals_independent_aircraft(kind, mode):
+    Wing, Quad = models()
+    model = Quad() if kind == "quadrotor" else Wing()
+    rng = np.random.default_rng(7)
+    states = np.array([model.initial_state(rng.uniform(-50, 50, 3) + [0, 0, 300],
+                                           [0., 0., 0.] if kind == "quadrotor" else [30., 0., 0.]) for _ in range(4)])
+    actions = (rng.uniform(model.actuator_low, 1., (4, 4)) if mode == "actuator" else
+               rng.uniform(-4., 4., (4, 3)) if mode == "acceleration" else states[:, :3] + rng.uniform(-80, 80, (4, 3)))
+    batch, paths = model.advance(states, actions, mode)
+    for state, action, final, path in zip(states, actions, batch, paths):
+        single, single_path = model.advance(state, action, mode)
+        np.testing.assert_allclose(final, single, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(path, single_path, rtol=0, atol=1e-12)
+
+
+def test_fixedwing_turn_is_coordinated_with_small_sideslip():
+    from had_env.dynamics.control import quaternion_matrix
+    Wing, _ = models()
+    model = Wing()
+    state = model.initial_state([0., 0., 300.], [30., 0., 0.])
+    worst = 0.
+    for _ in range(20):
+        state, _ = model.advance(state, [-5., 5., 0.], "acceleration")
+        body = quaternion_matrix(state[6:10]).T @ state[3:6]
+        worst = max(worst, abs(np.degrees(np.arcsin(body[1] / np.linalg.norm(body)))))
+    # The rudder damps sideslip; the pre-4.3 sign error more than tripled it (2.5 degrees).
+    assert worst < 1.
+    assert np.degrees(np.arctan2(state[4], state[3])) > 90.
+
+
 @pytest.mark.parametrize("model", ["particle", "UAV_fixedwing", "UAV_quadrotor"])
 def test_position_command_moves_without_teleport_and_invalid_batch_is_atomic(model):
     env = make_env(env_agent_type=model, env_agent_action_type="position", red_count=1,

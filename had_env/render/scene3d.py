@@ -14,8 +14,9 @@ from had_env.dynamics.control import quaternion_matrix
 
 
 DEFAULT_LAYERS = dict(labels=False, trails=True, groups=True, assignments=False,
-                      ranges=False, velocities=True)
+                      ranges=False, velocities=True, ground=True)
 SIDE_COLORS = {'red': '#ef777b', 'blue': '#70b7ff', 'targets': '#f3bd72'}
+SIDE_LETTERS = {'red': 'R', 'blue': 'B', 'targets': 'T'}
 
 
 def entity_key(entity):
@@ -85,8 +86,11 @@ def body_mesh(model):
         pieces.extend(_disc(center) for center in rotors)
         nose = np.array([.65, 0, .12])
     else:
-        pieces = [_box([0, 0, 0], [.65, .65, .65])]
-        nose = np.array([0, 0, .4])
+        # Protected asset: an upright octahedron, readable from every camera angle.
+        pieces = [(np.array([[.6, 0, 0], [0, .6, 0], [-.6, 0, 0], [0, -.6, 0], [0, 0, .9], [0, 0, -.9]]),
+                   np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4],
+                             [1, 0, 5], [2, 1, 5], [3, 2, 5], [0, 3, 5]], dtype=np.uint32))]
+        nose = np.array([0, 0, .9])
     vertices, faces, offset = [], [], 0
     for v, f in pieces:
         vertices.append(v)
@@ -119,7 +123,8 @@ def entity_geometry(entity, size):
         bank = math.degrees(math.atan2(rotation[2, 1], rotation[2, 2]))
         pitch = math.degrees(math.asin(float(np.clip(rotation[2, 0], -1, 1))))
         attitude = f'R {bank:+.0f}°  P {pitch:+.0f}°'
-    status = f"{entity.get('side', '')} {entity.get('id', '')} · {entity.get('role', 'unknown')} · HP {hp} · {state} · {attitude}"
+    name = entity.get('label') or f"{entity.get('side', '')} {entity.get('id', '')}"
+    status = f"{name} · {entity.get('role', 'unknown')} · HP {hp} · {state} · {attitude}"
     return dict(position=position.copy(), vertices=vertices, faces=mesh['faces'],
                 nose=mesh['nose'] @ world_rotation.T * size + position,
                 known_attitude=rotation is not None, kind=kind, dead=dead,
@@ -226,7 +231,7 @@ def _widget_class():
             self.layers = DEFAULT_LAYERS.copy()
             self.selected_key = None
             self.light = False
-            self.symbol_scale = .02
+            self.symbol_scale = .03
             self._bounds = world_bounds(())
             self._camera_suppressed = True
             self._last_camera = None
@@ -256,7 +261,8 @@ def _widget_class():
                 self.camera._report_change = self._report_camera
                 self._line_visuals = {name: scene.visuals.Line(parent=self.view.scene, method='gl',
                                                               connect='segments')
-                                      for name in ('bounds', 'axes', 'trails', 'velocity', 'groups', 'assignments', 'range_rings')}
+                                      for name in ('ground', 'bounds', 'axes', 'drops', 'target_rings', 'trails',
+                                                   'velocity', 'groups', 'assignments', 'range_rings')}
                 self._world_labels = []
                 self._range_mesh = scene.visuals.Mesh(meshdata=create_sphere(rows=12, cols=24),
                                                       color=(.6, .7, .9, .07), parent=self.view.scene)
@@ -337,7 +343,7 @@ def _widget_class():
             # A rotated world spans its diagonal, not just its longest axis.
             # Use that envelope so reset also fits tall, narrow native windows.
             extent = max(float(np.linalg.norm(np.ptp(self._bounds, axis=1))), 1.)
-            self.set_camera_state(dict(center=np.mean(self._bounds, axis=1), scale_factor=extent * 1.35,
+            self.set_camera_state(dict(center=np.mean(self._bounds, axis=1), scale_factor=extent * 1.15,
                                        distance=None, elevation=25, azimuth=-45, roll=0), emit=True)
 
         def focus_selected(self):
@@ -361,23 +367,30 @@ def _widget_class():
                                 color=color, width=width, connect='segments')
 
         def _draw_world(self):
-            corners = np.array([[x, y, z] for x in self._bounds[0] for y in self._bounds[1] for z in self._bounds[2]])
+            b = self._bounds
+            corners = np.array([[x, y, z] for x in b[0] for y in b[1] for z in b[2]])
+            # Corner index is 4*x + 2*y + z; edges drawn as coloured axes are skipped here.
+            axis_edges = {(0, 4), (0, 2), (2, 3)}
             segments = [(corners[i], corners[j]) for i in range(8) for j in range(i + 1, 8)
-                        if bin(i ^ j).count('1') == 1]
+                        if bin(i ^ j).count('1') == 1 and (i, j) not in axis_edges]
             self._line('bounds', segments, '#6b7f99' if self.light else '#526079')
-            origin = self._bounds[:, 0]
-            ends = [origin.copy() for _ in range(3)]
-            for axis, end in enumerate(ends):
-                end[axis] = self._bounds[axis, 1]
+            grid = []
+            if self.layers.get('ground', True):
+                for t in np.linspace(0., 1., 9)[1:-1]:
+                    x, y = b[0, 0] + t*np.ptp(b[0]), b[1, 0] + t*np.ptp(b[1])
+                    grid += [([x, b[1, 0], b[2, 0]], [x, b[1, 1], b[2, 0]]), ([b[0, 0], y, b[2, 0]], [b[0, 1], y, b[2, 0]])]
+            self._line('ground', grid, '#c9d3df' if self.light else '#273244')
+            # x and y run along the near ground edges; z rises at the left-rear corner,
+            # away from the scene centre.
+            origin, rear = b[:, 0], np.array([b[0, 0], b[1, 1], b[2, 0]])
+            ends = [np.array([b[0, 1], b[1, 0], b[2, 0]]), rear, np.array([b[0, 0], b[1, 1], b[2, 1]])]
             colors = np.repeat(np.array([[.9, .35, .35, 1], [.3, .75, .5, 1], [.4, .65, 1, 1]]), 2, axis=0)
-            self._line('axes', [(origin, end) for end in ends], colors, 2)
+            self._line('axes', [(origin, ends[0]), (origin, ends[1]), (rear, ends[2])], colors, 2)
             if not self._world_labels:
                 self._world_labels = [scene.visuals.Text('', font_size=9, parent=self.view.scene) for _ in range(4)]
-            for axis, name in enumerate(('X', 'Y', 'Z up')):
-                end = ends[axis]
-                text = f'{name}  {self._bounds[axis, 1]:g} m'
+            for axis, name in enumerate(('x', 'y', 'z')):
                 label = self._world_labels[axis]
-                label.text, label.pos = text, end
+                label.text, label.pos = f'{name} {b[axis, 1]:g} m', ends[axis]
                 label.color = '#33465e' if self.light else '#c8d7ec'
             label = self._world_labels[3]
             label.text = ' / '.join(f'{v:g}' for v in origin) + ' m'
@@ -438,7 +451,7 @@ def _widget_class():
                 if selected:
                     item['selected'].set_data(np.asarray([geometry['position']], dtype=np.float32),
                         size=27, face_color=(0, 0, 0, 0), edge_color='#f8d67a', edge_width=2)
-                label = f"{ {'red': 'R', 'blue': 'B', 'targets': 'T'}.get(key[0], key[0])}{key[1]}"
+                label = entity.get('label') or f"{SIDE_LETTERS.get(key[0], key[0])}{key[1]}"
                 if geometry['kind'] == 'unknown':
                     label += ' ?'
                 if geometry['dead']:
@@ -446,17 +459,38 @@ def _widget_class():
                 item['label'].text = label
                 item['label'].pos = geometry['position'] + [self._symbol_size * 1.7, 0, self._symbol_size * .4]
                 item['label'].color = '#33465e' if self.light else '#dce6f3'
-                item['label'].visible = self.layers['labels'] or selected or geometry['kind'] == 'unknown'
+                item['label'].visible = ((self.layers['labels'] and not geometry['dead']) or selected
+                                         or geometry['kind'] == 'unknown')
             self._draw_overlays()
             self._update_hud()
             self.canvas.update()
 
         def _draw_overlays(self):
-            trails = []
+            trails, trail_colors = [], []
             if self.layers['trails']:
-                for points in sampled_trails(self.history[-12:]).values():
+                for key, points in sampled_trails(self.history[-20:]).items():
+                    rgba = Color(SIDE_COLORS.get(key[0], '#8295af')).rgba
                     trails.extend(zip(points[:-1], points[1:]))
-            self._line('trails', trails, '#8295af', 1.2)
+                    trail_colors.extend([(*rgba[:3], .55)] * (2 * (len(points) - 1)))
+            self._line('trails', trails, np.asarray(trail_colors) if trails else '#8295af', 1.5)
+            drops, rings = [], []
+            ground, mark = self._bounds[2, 0], self._symbol_size * .5
+            for item in self.entities.values():
+                geometry = item['geometry']
+                if geometry['dead']:
+                    continue
+                x, y, z = geometry['position']
+                radius = item['entity'].get('fire_range')
+                if geometry['kind'] == 'target' and isinstance(radius, (int, float)) and radius > 0:
+                    angles = np.linspace(0., math.tau, 49)
+                    circle = np.c_[x + radius*np.cos(angles), y + radius*np.sin(angles), np.full(49, z)]
+                    rings.extend(zip(circle[:-1], circle[1:]))
+                if self.layers.get('ground', True) and z > ground:
+                    # Altitude drop line and a small cross where the entity is above the ground.
+                    drops += [((x, y, z), (x, y, ground)), ((x-mark, y, ground), (x+mark, y, ground)),
+                              ((x, y-mark, ground), (x, y+mark, ground))]
+            self._line('drops', drops, (.6, .67, .78, .4), 1)
+            self._line('target_rings', rings, (.95, .74, .45, .6), 1.2)
             velocities = []
             if self.layers.get('velocities', True):
                 for item in self.entities.values():
@@ -532,8 +566,13 @@ def _widget_class():
                 text.append('?: attitude unknown')
             if 'step' in self.frame:
                 metadata = self.frame.get('metadata', {})
-                text.append(f"Step {self.frame['step']} · t {self.frame.get('sim_time', 0):g} s"
-                            f" · target damage {metadata.get('target_damage', 0):g}")
+                alive = metadata.get('live_counts', {})
+                header = ' · '.join(str(value) for value in (
+                    str(metadata.get('task_mode', '')).upper(), metadata.get('env_agent_type', '')) if value)
+                text.insert(0, f"{header + ' · ' if header else ''}step {self.frame['step']} · "
+                               f"t {self.frame.get('sim_time', 0):g} s"
+                               + (f" · alive R {alive['red']} / B {alive['blue']}" if 'red' in alive else '')
+                               + f" · target damage {metadata.get('target_damage', 0):.3f}")
             metrics = QFontMetricsF(QFont('OpenSans', 10))
             available = max(width - 28, 12)
             # Qt may substitute a local font for VisPy's bundled OpenSans; the

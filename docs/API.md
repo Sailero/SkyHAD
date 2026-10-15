@@ -1,6 +1,6 @@
 # SkyHAD environment API
 
-The public entry points are `had_env.make_env`, `had_env.parallel_env`, and `from make_env import make_env`. Both editions contain the native environment, a general grouping extension and basic optional 2D rendering. Full `main` additionally supports UAV 3D rendering and a small video recorder. There is no desktop workbench or learning algorithm.
+The public entry points are `had_env.make_env`, `had_env.parallel_env`, and `from make_env import make_env`. The package contains the environment, an optional grouping (target-assignment) interface, and optional 2D/3D rendering and video capture. No learning algorithm is included.
 
 ## Construction
 
@@ -21,8 +21,6 @@ env = make_env(config={"env_agent_type": "UAV_fixedwing", "task_mode": "damage"}
 | `mpe` | Fixed red-then-blue list | Observation list, reward list, done list, `{"n": infos}` |
 | `grouping` | Defender target assignments and reserve | DecisionState, reward, done, info |
 
-`api="open_score"` is unsupported in v4. Algorithm-side adapters belong in the algorithm repository.
-
 | Configuration | Meaning/default |
 | --- | --- |
 | `red_count`, `blue_count`, `target_count` | Total team sizes and assets; native defaults 4/4/2 |
@@ -33,7 +31,7 @@ env = make_env(config={"env_agent_type": "UAV_fixedwing", "task_mode": "damage"}
 | `continuous` | Continuous acceleration intentions instead of discrete directions |
 | `task_mode`, `target_health` | `survival` (default) or `damage`; asset health defaults to 2 |
 | `max_cycles` | Native sampling horizon, default 100 |
-| `world_bounds`, `target_region` | Three `[low, high]` rows in meters |
+| `world_bounds`, `target_region` | Three `[low, high]` rows in meters; world bounds need a positive extent on every axis |
 | `scene_scale` | Default geometry scales: particle 1, fixed-wing .4, quadrotor .16 |
 | `red_spawn_annulus`, `blue_spawn_x`, `spawn_altitude` | Defender spawn radii, attacker x interval, aircraft altitude interval |
 | `plane_altitude` | Fixed 2D altitude, default `100*scene_scale` |
@@ -41,7 +39,7 @@ env = make_env(config={"env_agent_type": "UAV_fixedwing", "task_mode": "damage"}
 | `initialization`, `evaluate` | Aircraft `random`/`uniform` layout; `evaluate` is retained for compatibility and does not change sampling |
 | `target_initialization`, `target_positions` | Random/fixed assets; explicit positions select fixed layout |
 | `reward_weights` | Optional four-component survival shaping weights; rejected for damage |
-| `render_mode`, `record_events` | Both editions: None/human/rgb_array. Detailed physical events are available in both editions. |
+| `render_mode`, `record_events` | `None` (default), `human` or `rgb_array`; `record_events=True` adds collision/fire/damage events to `info["events"]` |
 
 Scene scale affects default geometry and interaction distances, not aircraft mass, inertia, wing size, or rotor size. Explicit geometry values are final meters. For Parallel/MPE, `reset(seed=...)` reproduces the complete initial layout and action-space sampling streams; reset without a new seed continues the instance's existing initialization stream.
 
@@ -82,9 +80,7 @@ Particle self-state is metric position/velocity. UAV self-state is `[position3, 
 
 The UAV critic feature vector appends each aircraft's rigid state and `[cycle, cumulative_target_damage, is_damage]`; dead rigid blocks are zero. These are the existing feature layouts, not a promise that `state()` exposes every variable of the mathematical Markov state. Particle critic features omit time/damage accumulators; external opponent memory is never automatically exposed. See the mathematical formulation for the full state.
 
-### Open configuration issue: zero-span normalization
-
-Absolute normalized observations and critic positions divide by each configured axis span. A zero-span axis, including a planar altitude represented by identical lower/upper z bounds, can produce nonfinite values; a fully collapsed world also has zero diagonal for relative normalization. This is a shared core configuration defect retained for a separate numerical/API change. The full renderer safely displays a collapsed axis at its metric coordinate, which does not make the observations finite. Use nonzero bounds for normalized observations/state until that issue is resolved.
+Normalized positions divide by the world-box spans and diagonal, so `world_bounds` must have a positive extent on every axis; a degenerate box is rejected when the environment is built. Planar particle worlds keep a full 3D box and fix only the agents' altitude.
 
 ## Rewards and episode endings
 
@@ -98,7 +94,7 @@ Absolute normalized observations and critic positions divide by each configured 
 
 A physical step resolves synchronous collisions and damage using pre-step information. Attack-role agents fire automatically under the existing range rule and die on firing: red attacks blue Attack agents, blue attacks protected assets. Scout and Disturb roles retain their existing sensing/reward and sector-damage mechanisms. Automatic firing does not generate navigation actions.
 
-Entity alive masks and displayed living counts use `Health > 0`. Survival termination instead uses `Health < 1e-3` for any asset or for all Blue Attack agents; exactly `1e-3` does not satisfy that check. Thus an entity with positive health below `1e-3` can remain marked alive on a terminal frame. Damage termination uses `Health <= 0` for all Blue Attack agents. These existing thresholds are identical in both editions.
+Entity alive masks and displayed living counts use `Health > 0`. Survival termination instead uses `Health < 1e-3` for any asset or for all Blue Attack agents; exactly `1e-3` does not satisfy that check. Thus an entity with positive health below `1e-3` can remain marked alive on a terminal frame. Damage termination uses `Health <= 0` for all Blue Attack agents.
 
 Raw asset damage is measured before health clamping, counts simultaneous sources, and is not capped by the asset's health. `step_target_damage` is the current increment; `target_damage` is the cumulative sum. Damage episode returns are Red=-D, Blue=D, without discounting.
 
@@ -130,24 +126,25 @@ The blue upper rule is reactive, balanced, or concentrated, and the lower naviga
 
 A macro step advances at least one physical step and returns at an absolute command tick, a nonterminal casualty, or episode end. If no defender survives while the episode remains active, it continues autonomously to episode end instead of returning at casualty or command boundaries; blue commands still refresh at their usual opportunities, and `info["no_red_continuation"]` is True. `info["delta"]` records elapsed steps. Damage macro reward sums negative step damage without intra-macro discounting. Survival pays terminal defender success 1, otherwise 0, and its `horizon_policy=red_win/draw/blue_win` is a grouping convention, distinct from native sampling truncation. A discounting learner should account explicitly for macro duration.
 
-In-memory `snapshot()` and `restore()` support independent continuation of the grouping environment under identical configuration. A video contains rendered frames, not a simulator checkpoint. Earlier desktop recording/replay tools remain recoverable in historical release tags.
+In-memory `snapshot()` and `restore()` support independent continuation of the grouping environment under identical configuration. Snapshots record the physics protocol and are rejected by a simulator whose physics differ.
 
 ## Rendering from RL code
 
-Construct any interface with `render_mode="human"` to display the current scene, or `render_mode="rgb_array"` for an H×W×3 `uint8` image from `env.render()`. `None` keeps training headless; calling `render()` then returns `None`. Human mode updates after reset and each environment step. Explicit repeated rendering never advances physics or consumes simulator RNG. Call `env.close()` to release its windows.
+Construct any interface with `render_mode="human"` to display the current scene, or `render_mode="rgb_array"` for an H×W×3 `uint8` image from `env.render()`. `None` keeps training headless; calling `render()` then returns `None`. Human mode updates after reset and each environment step. Rendering never advances physics or consumes simulator RNG. Call `env.close()` to release windows.
 
-Both editions default to `env.set_view_mode("projections")`, the basic XY/XZ view. Full `main` additionally supports `env.set_view_mode("3d")` for `UAV_fixedwing` and `UAV_quadrotor`. Three-dimensional simulation remains available in core; only its 3D display is omitted. The 3D renderer opens one scene window with mouse orbit/pan/zoom, metric equal axes and z up. Model glyphs are symbolically enlarged and labeled; quaternion orientation is physical. Missing attitude is explicitly unknown. The 3D backend requires PySide6, VisPy and usable OpenGL, including for RGB capture; basic 2D RGB works without a display.
+`env.set_view_mode("projections")` (default) draws equal-scale XY (top) and XZ (side) panels with Pygame (`.[render]`). Labels `R0`, `B0`, `T0` match the agent names `red_0`, `blue_0` and `target_0`. UAV outlines are rotated by the physical attitude quaternion and projected onto each panel, so heading, pitch and bank are visible; trails show the last 20 s and rings show the targets' fire range.
+
+`env.set_view_mode("3d")` is available for `UAV_fixedwing` and `UAV_quadrotor` (`.[viewer3d]`, PySide6 + VisPy with a usable OpenGL context, also for RGB capture). It opens one window with mouse orbit, Shift-drag pan, wheel zoom, `R` reset and `F` focus, metric equal axes with z up, a ground grid, altitude drop lines and short trails. Aircraft bodies are enlarged symbols (3% of the world extent); their orientation is the physical quaternion.
 
 ```python
 env = make_env(env_agent_type="UAV_fixedwing", render_mode="human")
-env.set_view_mode("3d")  # full edition; omit this line for basic 2D
+env.set_view_mode("3d")  # omit for the 2D projections
 env.reset(seed=42)
 try:
     while env.agents:
         env.step({agent: env.action_space(agent).sample() for agent in env.agents})
-        env.render()
 finally:
     env.close()
 ```
 
-Full `had_env.render.video.VideoRecorder(env, path, fps=None)` is a context manager: call `capture()` after the reset or steps you choose to record. It requires `render_mode="rgb_array"` and the optional `record` extra, streams frames to a video, and never selects actions or advances the environment. FPS controls playback speed; it does not change physical time. The [rendering example](../examples/rendering.py) demonstrates 2D/3D and video use in the full edition.
+`had_env.render.video.VideoRecorder(env, path, fps=None)` is a context manager: call `capture()` after the reset or steps you choose to record. It requires `render_mode="rgb_array"` and the `.[record]` extra, streams frames to an MP4 file, and never selects actions or advances the environment. FPS sets playback speed only. [`examples/rendering.py`](../examples/rendering.py) shows both views and recording.

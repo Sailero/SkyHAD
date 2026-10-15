@@ -1,111 +1,151 @@
-# SkyHAD 4.2
+# SkyHAD
 
-SkyHAD is an aerial attack-defense environment for multi-agent reinforcement learning. Red defends stationary assets against Blue. Particle, six-DOF fixed-wing and quadrotor models share collision, automatic attack, observation and task rules. No learning algorithm is included.
+SkyHAD is a multi-agent air-defense environment for reinforcement learning. Red UAVs defend stationary assets against Blue attacking UAVs. Three vehicle models share one set of combat, observation and task rules, so the same experiment can move from a fast point-mass model to six-degree-of-freedom aircraft by changing one argument.
 
-Choose **main** for the environment, default 2D projections, optional native 3D and video recording. Choose **core** for the same environment and minimal 2D rendering. Both branches use `had-env` / `had_env`, version 4.2.0, and retain the same physics and Parallel/MPE/grouping APIs. Keep separate virtual environments. See [edition selection](docs/EDITIONS.md).
+| Model | Dynamics | Parameters from |
+| --- | --- | --- |
+| `particle` | 3D (or planar) point mass, 1 s steps | project defaults |
+| `UAV_fixedwing` | 6-DOF rigid body, nonlinear Aerosonde aerodynamics and propeller | [Beard & McLain, BYU MAGICC](https://github.com/byu-magicc/mavsim_public) |
+| `UAV_quadrotor` | 6-DOF rigid body, geometric attitude control | [Lee, Leok & McClamroch 2010](https://arxiv.org/abs/1003.2005) |
 
-## Install
+<p align="center">
+  <img src="docs/images/projections.png" width="38%" alt="2D top and side projections">
+  <img src="docs/images/scene3d.png" width="58%" alt="3D view">
+</p>
 
-Use Python 3.10-3.12. The base installation needs only NumPy, SciPy, Gymnasium and PettingZoo. Rendering dependencies are optional; no Torch is required.
+The environment follows the [PettingZoo](https://pettingzoo.farama.org/) Parallel API. No learning algorithm is included.
+
+## Installation
+
+Python 3.10–3.12.
 
 ```bash
-git clone --branch main https://github.com/Sailero/SkyHAD.git SkyHAD-full
-cd SkyHAD-full
-python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e ".[render,viewer3d,record]"
-python examples/quickstart.py
+git clone https://github.com/Sailero/SkyHAD.git
+cd SkyHAD
+pip install -e .                      # headless: NumPy, SciPy, Gymnasium, PettingZoo
+pip install -e ".[render]"            # + 2D window / RGB frames (Pygame)
+pip install -e ".[render,viewer3d,record]"   # + 3D view (PySide6, VisPy) and MP4 recording
 ```
 
-`render` adds Pygame for 2D; `viewer3d` adds PySide6 and VisPy; `record` adds ImageIO and its FFmpeg integration. Install only `.` for headless RL, or `.[render]` for 2D. Linux Qt/3D sessions need a usable OpenGL context and Qt's XCB runtime libraries. On Ubuntu:
+On Linux the 3D view needs an OpenGL display and Qt's XCB runtime libraries:
 
 ```bash
 sudo apt-get install -y libegl1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-glx0
 ```
 
-## Environment and rendering
+## Quick start
 
 ```python
 from had_env import make_env
 
-env = make_env(env_agent_type="UAV_fixedwing", task_mode="survival",
-               red_count=4, blue_count=4, max_cycles=100, render_mode="human")
-# Default: minimal 2D projections. Full main can switch to native 3D:
-env.set_view_mode("3d")
-try:
-    observations, infos = env.reset(seed=42)
-    while env.agents:
-        actions = {agent: env.action_space(agent).sample() for agent in env.agents}
-        observations, rewards, terminated, truncated, infos = env.step(actions)
-finally:
-    env.close()
+env = make_env(env_agent_type="UAV_fixedwing", red_count=4, blue_count=4,
+               max_cycles=100, render_mode="human")
+observations, infos = env.reset(seed=42)
+while env.agents:
+    actions = {agent: env.action_space(agent).sample() for agent in env.agents}
+    observations, rewards, terminations, truncations, infos = env.step(actions)
+env.close()
 ```
 
-Human mode renders through the environment's normal reset/step lifecycle. `env.set_view_mode("projections")` selects the default projections again. Use `render_mode="rgb_array"` and `env.render()` to obtain an RGB frame; leave `render_mode=None` for headless training. View changes do not change physics, observations, actions or RNG. Core supports 2D only and gives guidance when a full-only view is requested.
+Agents are named `red_0 … red_{n-1}` and `blue_0 … blue_{m-1}`. Both teams act simultaneously from the same pre-step observations; each step is 1 s of simulated time. Runnable scripts are in [`examples/`](examples).
 
-## Video from code
+## Environment at a glance
 
-The full edition records frames directly from the environment:
+**Scenario.** Assets sit in a region near the west side of the world. Red spawns around the assets, Blue on the east half. Attackers fire automatically: a Blue attacker fires when an asset is within its fire range, a Red attacker when a Blue attacker is. A firing attacker self-destructs and damages every enemy within its blast radius (full damage inside 300 m, falling linearly to zero at 600 m in 3D, scaled by model). Optional Scout and Disturb roles add a sensing sector and a jamming sector that slowly damages aircraft of both teams. Aircraft also die on collision.
 
-```python
-from had_env import make_env
-from had_env.render.video import VideoRecorder
-
-env = make_env(red_count=4, blue_count=4, max_cycles=100, render_mode="rgb_array")
-try:
-    env.reset(seed=42)
-    with VideoRecorder(env, "outputs/episode.mp4", fps=10) as recorder:
-        recorder.capture()
-        while env.agents:
-            env.step({agent: env.action_space(agent).sample() for agent in env.agents})
-            recorder.capture()
-finally:
-    env.close()
-```
-
-Each capture writes one frame. `fps` controls video playback speed; the display target of 30 FPS does not assert physical real-time playback. See `examples/rendering.py` for native rendering/recording usage. There are no desktop workbench, recording/replay command tools or analysis panels.
-
-## Tasks, controls and grouping
-
-| Setting | Options |
+| Setting | Options (default first) |
 | --- | --- |
 | `env_agent_type` | `particle`, `UAV_fixedwing`, `UAV_quadrotor` |
-| `env_agent_action_type` | `acceleration`, `position`; UAVs also support `actuator` |
+| `env_agent_action_type` | `acceleration`, `position`, `actuator` (UAVs only) |
 | `task_mode` | `survival`, `damage` |
-| `api` | `parallel` (default), `mpe`, `grouping` |
-| `spatial_dim` | 3 (factory default); particle also supports 2 |
+| `api` | `parallel`, `mpe`, `grouping` |
+| `spatial_dim` | `3`; `2` for planar particles |
+| team sizes | `red_count=4`, `blue_count=4`, `target_count=2`, plus `red_scouts`, `red_disturbers`, `blue_scouts`, `blue_disturbers` |
 
-These choices provide sixteen native model/action/task themes. Fixed-wing aircraft cannot hover. Survival gives Red a loss when any defended asset is destroyed and a win when all Blue attackers are eliminated. Damage uses minus the new raw asset damage as Red's team reward. Every teammate receives the same team reward; count it once per step. `max_cycles` is a sampling truncation, not a win.
+**Actions.**
+
+| Control | Space | Meaning |
+| --- | --- | --- |
+| `acceleration` (discrete) | `Discrete(27)` (`Discrete(9)` in 2D) | zero or one of 26 unit directions |
+| `acceleration`, `continuous=True` | `Box(-1, 1, (3,))` | scaled by the model's acceleration limit and tracked by its controller |
+| `position` | `Box(world_low, world_high, (3,))` | fly toward an absolute point (fixed wings fly through it) |
+| `actuator`, fixed wing | `Box(-1, 1, (4,))` | elevator, aileron, rudder (±25°), throttle |
+| `actuator`, quadrotor | `Box(0, 1, (4,))` | front, right, rear, left rotor thrust fractions |
+
+**Observations.** Each agent sees one 11-value row for every other entity in a fixed order: relative position and velocity (normalized), health, alive flag and red/blue/target flags. Dead entities are zero rows. UAV agents (and particles under position control) additionally receive their own raw state as a `Dict` observation. `env.state()` gives a centralized critic vector, and `infos[agent]` carries masks, events, time and task counters.
+
+**Rewards and endings.**
+
+| | `survival` | `damage` |
+| --- | --- | --- |
+| Red reward | +10 when every Blue attacker is destroyed, −10 when an asset is destroyed | minus the asset damage dealt this step |
+| Natural ending | either of those events | every Blue attacker destroyed |
+
+Every teammate receives the same team reward, so count it once per team. `max_cycles` truncates sampling and never awards a win. See the [API reference](docs/API.md) for exact shapes, masks and info keys.
+
+## Rendering and video
+
+Rendering never changes physics, observations or random streams.
 
 ```python
-from had_env import make_env
-from had_env.grouping.policies import RulePolicy
-
-env = make_env(api="grouping", red=8, blue=8, targets=2,
-               task_mode="damage", max_steps=100)
-policy = RulePolicy("rule")
-try:
-    state = env.reset(seed=42)
-    while not env.done:
-        state, reward, done, info = env.step(policy.act(state))
-finally:
-    env.close()
+env = make_env(env_agent_type="UAV_quadrotor", render_mode="rgb_array")
+env.set_view_mode("3d")       # default "projections": XY top and XZ side views
+env.reset(seed=0)
+frame = env.render()          # H x W x 3 uint8
 ```
 
-Pure environment evaluation is available in both editions:
+The 2D view draws equal-scale top and side projections with short trails, target fire-range rings and attitude-accurate aircraft outlines. The 3D view (UAV models) adds orbit/pan/zoom, a ground grid and altitude drop lines. To save a video:
+
+```python
+from had_env.render.video import VideoRecorder
+
+with VideoRecorder(env, "outputs/episode.mp4", fps=10) as video:
+    video.capture()
+    while env.agents:
+        env.step({a: env.action_space(a).sample() for a in env.agents})
+        video.capture()
+```
+
+## Customizing
+
+- **Per experiment:** pass keywords or a JSON/dict `config` to `make_env` (world bounds, target region, spawn regions, fire range, scene scale, target health, roles, horizon). Explicit keywords override the config; `env.effective_config` shows the resolved values.
+- **Rules and constants:** [`had_env/config.py`](had_env/config.py) collects every tunable constant with units: particle limits, attack radii, disturber and scout sectors, rewards and model presets.
+- **New behavior:** each concern lives in one small module (layout below). A new vehicle model only needs a `RigidBodyDynamics` subclass that returns body forces and moments.
+
+```text
+had_env/
+  factory.py, environment.py, mpe.py   make_env, PettingZoo Parallel env, MPE-style lists
+  config.py                            constants and immutable EnvConfig
+  simulation.py, world.py              episode lifecycle, collisions and automatic fire
+  initialization.py                    reset distributions
+  observations.py, tasks.py            observation packing, rewards and endings
+  agents/                              Attack, Scout and Disturb roles
+  dynamics/                            batched RK4 rigid body, fixed wing, quadrotor
+  grouping/                            optional event-driven target-assignment API
+  render/                              optional 2D (Pygame), 3D (VisPy) and video
+```
+
+## Performance
+
+Measured for 4 vs 4 on one desktop CPU core: particle ≈ 700 steps/s; fixed wing ≈ 12 and quadrotor ≈ 16 steps/s. Each UAV step integrates 1 s with 100 RK4 substeps for all aircraft at once. Use several environment processes for large-scale training.
+
+## Documentation
+
+- [API reference](docs/API.md): constructor options, spaces, info keys, masks, grouping API
+- [Modeling notes](docs/MODELING.md): equations, parameters, assumptions and their sources
+- [Benchmark protocol](docs/BENCHMARK.md) and [`examples/defender_evaluation.py`](examples/defender_evaluation.py)
+- [Mathematical formulation (PDF)](docs/PROBLEM_FORMULATION.pdf) with its [LaTeX source](docs/PROBLEM_FORMULATION.tex)
+- [Changelog](CHANGELOG.md)
+
+## Tests
 
 ```bash
-python examples/defender_evaluation.py --model UAV_quadrotor --task damage --seeds 11 12 13 --horizon 100
+pip install -e ".[render,viewer3d,record,test]"
+pytest -q
 ```
 
-Read the [API](docs/API.md), [modeling assumptions](docs/MODELING.md), [benchmark protocol](docs/BENCHMARK.md), mathematical [PDF](docs/PROBLEM_FORMULATION.pdf) and [validation record](docs/VALIDATION.md). The retained zero-span observation normalization issue is documented there.
+Tests that need an optional package or an OpenGL context skip when it is unavailable.
 
-## Tests and releases
+## License
 
-```bash
-python -m pip install -e ".[render,viewer3d,record,test]"
-python -m pytest -q
-```
-
-Base-only tests skip optional render checks. Full CI additionally exercises real Linux OpenGL. Paired releases use `v4.2.0-full` and `v4.2.0-core`; existing historical tags remain available. The core provenance manifest identifies its exact full source commit and shared file hashes.
+[MIT](LICENSE)

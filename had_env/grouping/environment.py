@@ -6,7 +6,7 @@ import copy
 
 import numpy as np
 
-from .adapter import HADStage3Adapter
+from .adapter import GroupingAdapter
 
 from .domain import DecisionState, Entity, Grouping
 from .opponents import OPPONENTS, sample
@@ -79,12 +79,10 @@ class KnownOpponentEnv:
                 ys = np.linspace(-650.0, 650.0, int(targets))
                 target_positions = [[-2100.0, float(y), 100.0] for y in ys]
             target_positions = (np.asarray(target_positions)*effective.scene_scale).tolist()
-        self.adapter = HADStage3Adapter(int(red), int(blue), int(targets), max_steps=self.max_steps,
-                                        target_positions=target_positions,
-                                        blue_rule_style="rush",
-                                        horizon_policy=self.horizon_policy,
-                                        task_mode=task_mode, target_health=target_health,
-                                        spatial_dim=spatial_dim, plane_altitude=plane_altitude, effective_config=effective)
+        self.adapter = GroupingAdapter(int(red), int(blue), int(targets), max_steps=self.max_steps,
+                                       target_positions=target_positions, horizon_policy=self.horizon_policy,
+                                       task_mode=task_mode, target_health=target_health, spatial_dim=spatial_dim,
+                                       plane_altitude=plane_altitude, effective_config=effective)
         self.task_mode = self.adapter.task_mode
         self.target_health = self.adapter.target_health
         self.spatial_dim = self.adapter.spatial_dim
@@ -174,7 +172,7 @@ class KnownOpponentEnv:
         while True:
             actions = self.executor.act(self.adapter, self.previous)
             with self._legacy_rng():
-                _, rewards, self.done, physical_info = self.adapter.step(actions, blue_style="rush")
+                _, rewards, self.done, physical_info = self.adapter.step(actions)
             macro_reward += float(rewards["Red"])
             events = physical_info["events"]
             all_events.extend(events)

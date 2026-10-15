@@ -12,31 +12,35 @@ import numpy as np
 
 from had_env import __version__
 
-# Motion: particle limits, timestep and world/plane geometry.
-vDomain = [35., 120.]
-aMax = 40.
-BlueAmaxCoef = 1.0
-BlueVmaxCoef = 1.0
-wMax = np.pi  # Maximum heading change per physical step.
-Boundary = True
-Interval = 1
-AeroPoint = [[-2500., 2500.], [-2500., 2500.], [0., 2500.]]
-EnvDim = len(AeroPoint)  # Coordinate slots stay 3 even for planar motion.
-PlanarAltitude = 100.
-PlanarSpawnSeparation = 30.
+# Time and world. Geometry below is multiplied by each model's scene scale
+# (particle 1, fixed wing 0.4, quadrotor 0.16) unless given explicitly.
+Interval = 1                     # environment step, s (UAVs integrate 100 RK4 substeps)
+AeroPoint = [[-2500., 2500.], [-2500., 2500.], [0., 2500.]]  # world box x/y/z, m
+EnvDim = len(AeroPoint)          # coordinate slots stay 3 even for planar motion
+Boundary = True                  # clip positions to the world box
+PlanarAltitude = 100.            # fixed altitude of 2D particle worlds, m
+PlanarSpawnSeparation = 30.      # minimum spawn spacing, m
 
-# Uniform placement fractions measured from each team's x boundary.
+# Particle motion (UAV limits live in PRESETS and the dynamics models).
+vDomain = [35., 120.]            # speed range, m/s
+aMax = 40.                       # acceleration limit, m/s^2
+BlueAmaxCoef = 1.0               # Blue acceleration multiplier
+BlueVmaxCoef = 1.0               # Blue speed multiplier
+wMax = np.pi                     # maximum heading change per step, rad
+
+# Uniform initialization: x placement fraction measured from each team's x boundary.
 AttackRatio = 0.3
 DisturbRatio = 0.2
 ScoutRatio = 0.1
 
-# Combat: target HP, full/zero-damage radii and scout/disturber sectors.
-initial_health = 2.0
-AttackDistance = {
+# Attack: a firing attacker self-destructs and damages every enemy within the
+# zero-damage radius, linearly from 1 inside the full-damage radius.
+initial_health = 2.0             # protected asset HP (aircraft have HP 1)
+AttackDistance = {               # [full-damage, zero-damage] radius, m
     2: [200., 400.],
     3: [300., 600.],
 }
-AttackIntensity = 1.0
+AttackIntensity = 1.0            # damage at full strength
 
 
 def attack_distance_for(spatial_dim=2):
@@ -49,34 +53,23 @@ def attack_distance_for(spatial_dim=2):
     return inner, outer
 
 
-DisturbAngleMax = np.pi / 3.
-DisturbDistanceMax = 600.
-DisturbIntensity = 0.1
-GaussSigma = 1.
-ScoutAngleMax = np.pi * 2 / 3.
-ScoutDistanceMax = 2000.
+# Disturbers jam UAVs of both teams inside a forward sector (never assets).
+DisturbAngleMax = np.pi / 3.     # full sector angle, rad
+DisturbDistanceMax = 600.        # sector radius, m
+DisturbIntensity = 0.1           # HP per step at unit Gaussian strength
+GaussSigma = 1.                  # Gaussian width in units of the sector radius
+# Scouts have a functional sector only; observations are never filtered by it.
+ScoutAngleMax = np.pi * 2 / 3.   # full sector angle, rad
+ScoutDistanceMax = 2000.         # sector radius, m
 
 # Survival rewards; damage mode returns raw new target damage instead.
-HorizonPolicy = "red_win"
+HorizonPolicy = "red_win"        # grouping API outcome at its horizon
 reward_disturb_single = 0.
 reward_scout_single = 0.
 reward_attack_single = 0.
-reward_boundary = 0.05
-reward_episode = 10
-OBS_ENTITY_DIM = 11  # Position 3, velocity 3, health, alive and side flags 3.
-
-# Historical presentation attribute imports remain available on the full edition.
-_DISPLAY_NAMES = frozenset(('ScreenLength', 'ScreenWidth', 'ScreenHeight', 'SurfaceColor',
-                          'BorderColor', 'RedColor', 'BlueColor', 'DeadAgentColor'))
-
-
-def __getattr__(name):
-    if name in _DISPLAY_NAMES:
-        from had_env._rendering import has_native_renderer
-        if has_native_renderer():
-            from had_env.render import style
-            return getattr(style, name)
-    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+reward_boundary = 0.05           # Scout/Disturb shaping penalty near x/y walls
+reward_episode = 10              # terminal win/loss reward
+OBS_ENTITY_DIM = 11              # position 3, velocity 3, health, alive, red/blue/target flags
 
 
 @dataclass(frozen=True)
@@ -96,10 +89,12 @@ PRESETS = {
 }
 
 
-def _bounds(value, default, name):
+def _bounds(value, default, name, positive_extent=False):
     a = np.asarray(default if value is None else value, dtype=float)
     if a.shape != (3, 2) or not np.isfinite(a).all() or np.any(a[:, 0] > a[:, 1]):
         raise ValueError(f"{name} must contain finite ordered x/y/z bounds")
+    if positive_extent and np.any(a[:, 0] >= a[:, 1]):
+        raise ValueError(f"{name} must have a positive extent on every axis (observations are normalized by it)")
     return tuple(tuple(float(v) for v in row) for row in a)
 
 
@@ -136,10 +131,10 @@ class EnvConfig:
         if not np.isfinite(scale) or scale <= 0:
             raise ValueError("scene_scale must be positive and finite")
         object.__setattr__(self, "scene_scale", scale)
-        for name, default in (
-            ("world_bounds", AeroPoint),
-            ("target_region", [[-2300, -1900], [-1200, 1200], [500, 1500]])):
-            object.__setattr__(self, name, _bounds(getattr(self, name), np.asarray(default)*scale, name))
+        object.__setattr__(self, "world_bounds", _bounds(self.world_bounds, np.asarray(AeroPoint)*scale,
+                                                         "world_bounds", positive_extent=True))
+        object.__setattr__(self, "target_region", _bounds(
+            self.target_region, np.asarray([[-2300, -1900], [-1200, 1200], [500, 1500]])*scale, "target_region"))
         for name, default in (("red_spawn_annulus", [800, 2200]),
                               ("blue_spawn_x", [0, 2500]), ("spawn_altitude", [200, 1500])):
             value = np.asarray(np.asarray(default)*scale if getattr(self, name) is None else getattr(self, name), float)
@@ -189,4 +184,4 @@ def load_config(config):
 
 
 CORE_VERSION = "skyhad-" + __version__
-PHYSICS_PROTOCOL = "skyhad-v3-rigid-body-task-start-combat"
+PHYSICS_PROTOCOL = "skyhad-4.3"  # changes whenever simulated trajectories change

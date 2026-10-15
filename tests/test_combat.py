@@ -186,6 +186,37 @@ def test_optional_recording_preserves_current_physics_trajectory(seed):
         json.dumps(env.last_physics_events, allow_nan=False)
 
 
+def test_disturber_damages_uavs_inside_its_forward_sector_only():
+    env = Simulation(0, 2, 1, red_disturb_n=1, spatial_dim=3)
+    env.reset(seed=1)
+    disturber, ahead, behind = env.red_agents[0], env.blue_agents[0], env.blue_agents[1]
+    disturber.reset([0., 0., 500.], [40., 0., 0.])
+    ahead.reset([300., 0., 500.], [-40., 0., 0.])
+    behind.reset([-300., 900., 500.], [-40., 0., 0.])
+    env.targets[0].reset([-2000., -2000., 500.], [0., 0., 0.])
+    env.reset_episode_state()
+    env.step_physics(np.zeros((3, 3)))
+    # Strength is a unit Gaussian of distance / sector radius: 0.1 * pdf(300 / 600).
+    assert disturber.IsDisturb
+    assert ahead.Health == pytest.approx(1. - .1 * np.exp(-.125) / np.sqrt(2 * np.pi))
+    assert behind.Health == 1.
+    assert env.targets[0].Health == env.targets[0].initial_health
+
+
+@pytest.mark.parametrize("model", ["particle", "UAV_fixedwing", "UAV_quadrotor"])
+def test_random_reset_keeps_every_spawn_off_the_world_walls(model):
+    env = make_env(env_agent_type=model, red_count=4, blue_count=4)
+    try:
+        for seed in range(30):
+            env.reset(seed=seed)
+            bounds = env.simulation.world_bounds
+            for agent in env.simulation.agents:
+                xy = np.asarray(agent.position[:2])
+                assert np.all(xy > bounds[:2, 0]) and np.all(xy < bounds[:2, 1])
+    finally:
+        env.close()
+
+
 def test_damage_events_explain_snapshot_distance_and_firing_self_destruction():
     env = Simulation(1, 1, 1)
     env.reset(seed=4)

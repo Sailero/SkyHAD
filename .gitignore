@@ -15,7 +15,6 @@ checkpoints/
 *.log
 .DS_Store
 Thumbs.db
-Open-SCORE/
 .vscode/
-
+.idea/
 .worktrees/

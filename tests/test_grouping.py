@@ -153,7 +153,7 @@ def test_scaled_uav_rush_reaches_target_fire_before_default_horizon(model):
         adapter.set_joint_assignments({adapter.red_ids[0]: None}, {adapter.blue_ids[0]: 0})
         done = False
         while not done and adapter.step_count < 100:
-            _, _, done, _ = adapter.step({adapter.red_ids[0]: 0}, blue_style="rush")
+            _, _, done, _ = adapter.step({adapter.red_ids[0]: 0})
             assert np.isfinite(blue.rigid_state).all()
             assert abs(np.linalg.norm(blue.rigid_state[6:10])-1.) < 1e-12
         assert adapter.step_count < 100

@@ -9,7 +9,7 @@ pygame = pytest.importorskip("pygame")
 
 from had_env.simulation import Simulation
 from make_env import make_env
-from had_env.config import ScreenLength, ScreenWidth, ScreenHeight
+from had_env.render.style import ScreenLength, ScreenWidth, ScreenHeight
 
 
 @pytest.fixture
@@ -178,26 +178,42 @@ def test_quad_nose_makes_quarter_turn_visible_and_follows_attitude():
 
 
 @pytest.mark.parametrize("model", ["UAV_fixedwing", "UAV_quadrotor"])
-def test_uav_roles_remain_visible_without_labels(model):
-    row = dict(position=[.5, .5, .5], velocity=[1, 0, 0], alive=True,
+def test_uav_role_badges_distinguish_roles(model):
+    row = dict(position=[.5, .5, .5], velocity=[1, 0, 0], alive=True, label="R0",
                env_agent_type=model, attitude=[1., 0., 0., 0.])
     images = [_agent_pixels({**row, "type": role}) for role in ("Attack", "Disturb", "Scout")]
     assert all(not np.array_equal(a, b) for a, b in ((images[0], images[1]), (images[1], images[2])))
 
 
-def test_bank_changes_cue_without_changing_forward_heading():
+def test_projected_glyph_shows_bank_and_pitch_without_moving_the_nose():
+    from had_env.render.glyphs import aircraft_geometry
     row = dict(position=[.5, .5, .5], velocity=[1, 0, 0], type="Scout", alive=True,
                env_agent_type="UAV_fixedwing", attitude=[1., 0., 0., 0.])
     banked = {**row, "attitude": [2**-.5, 2**-.5, 0, 0]}
     assert not np.array_equal(_agent_pixels(row), _agent_pixels(banked))
-    from had_env.render.glyphs import attitude_cues, aircraft_geometry
-    assert attitude_cues(banked)["bank"] == pytest.approx(np.pi / 2)
+    np.testing.assert_allclose(aircraft_geometry(banked)["nose"], aircraft_geometry(row)["nose"], atol=1e-12)
+    # Wings seen from above shorten when the aircraft banks 90 degrees.
+    width = lambda value: np.ptp([y for _, y in aircraft_geometry(value)["polygons"][0]])
+    assert width(banked) < .1 * width(row)
     nose_up = {**row, "attitude": [2**-.5, 0, -2**-.5, 0]}
-    assert attitude_cues(nose_up)["nose_up_pitch"] == pytest.approx(np.pi / 2)
     assert aircraft_geometry(nose_up, "xz")["nose"][1] < 0
-    assert aircraft_geometry(nose_up, "xy")["head_on"]
-    assert attitude_cues({"velocity": [1, 0, 1]})["bank"] is None
-    assert attitude_cues({"attitude": [0, 0, 0, 0]})["nose_up_pitch"] is None
+    assert abs(aircraft_geometry(nose_up, "xy")["nose"][0]) < 1e-9
+    assert aircraft_geometry({**row, "attitude": None}) is None
+    assert aircraft_geometry({**row, "attitude": [0, 0, 0, 0]}) is None
+
+
+def test_labels_match_api_agent_names():
+    from had_env.render.backend import render_information, render_metadata
+    instance = Simulation(2, 2, 2, spatial_dim=3)
+    try:
+        instance.reset(seed=5)
+        targets, red, blue = render_information(instance)
+        assert [row["label"] for row in red] == ["R0", "R1"]
+        assert [row["label"] for row in blue] == ["B0", "B1"]
+        assert [row["label"] for row in targets] == ["T0", "T1"]
+        assert [row["label"] for row in render_metadata(instance)["targets"]] == ["T0", "T1"]
+    finally:
+        instance.close()
 
 
 def test_native_hud_uses_effective_bounds_and_raw_damage():
@@ -221,7 +237,7 @@ def test_native_hud_uses_effective_bounds_and_raw_damage():
         with_hud = instance.render_rgb_array()
         from had_env.render.render import DisplayPlayer
         surface = pygame.Surface((800, 1000))
-        surface.fill(__import__("had_env.config", fromlist=["SurfaceColor"]).SurfaceColor)
+        surface.fill(__import__("had_env.render.style", fromlist=["SurfaceColor"]).SurfaceColor)
         DisplayPlayer(surface).draw(instance._render_information(), 0)
         assert not np.array_equal(with_hud, np.transpose(pygame.surfarray.array3d(surface), (1, 0, 2)))
     finally:
@@ -261,7 +277,7 @@ def test_render_preserves_full_uav_state_rng_and_next_transition(model):
 
 
 def test_team_palette_has_light_background_contrast_and_grayscale_separation():
-    from had_env.config import RedColor, BlueColor, SurfaceColor
+    from had_env.render.style import RedColor, BlueColor, SurfaceColor
     def luminance(color):
         rgb = np.asarray(color[:3]) / 255
         linear = np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4)

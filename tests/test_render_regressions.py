@@ -36,7 +36,7 @@ def test_xz_target_destruction_changes_appearance():
 
 
 @pytest.mark.parametrize('roll', [math.pi, math.pi / 2])
-def test_directed_bank_cues_distinguish_inversion_and_sign(roll):
+def test_projected_attitude_distinguishes_inversion_and_bank_sign(roll):
     player, surface = player_and_surface()
     frames = []
     for angle in (0 if roll == math.pi else -roll, roll):
@@ -76,19 +76,10 @@ def test_boundary_glyphs_do_not_bleed_into_headers_or_other_panels():
     assert not np.any(mask & ~allowed)
 
 
-@pytest.mark.filterwarnings('ignore:invalid value encountered in scalar divide:RuntimeWarning:had_env.observations')
-def test_degenerate_axis_has_safe_display_normalization():
+def test_zero_span_world_is_rejected_before_observations_divide_by_it():
     from had_env.config import EnvConfig
-    from had_env.simulation import Simulation
-    config = EnvConfig(env_agent_type='UAV_fixedwing', world_bounds=[[-1000,1000],[-1000,1000],[40,40]],
-        target_region=[[-900,-800],[-300,300],[40,40]], spawn_altitude=[40,40], plane_altitude=40)
-    sim = Simulation(1, 1, 1, effective_config=config, spatial_dim=3)
-    try:
-        sim.reset(seed=4)
-        assert all(np.isfinite(row['position']).all() for group in sim._render_information() for row in group)
-        assert sim.render_rgb_array().shape == (1000, 800, 3)
-    finally:
-        sim.close()
+    with pytest.raises(ValueError, match='positive extent'):
+        EnvConfig(env_agent_type='UAV_fixedwing', world_bounds=[[-1000, 1000], [-1000, 1000], [40, 40]])
 
 
 @pytest.mark.parametrize('role', ['Scout', 'Disturb'])

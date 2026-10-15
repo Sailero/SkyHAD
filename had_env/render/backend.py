@@ -1,21 +1,40 @@
-"""Native Pygame adapter; all state-to-picture work stays optional."""
+"""Bridge from a Simulation to the optional Pygame (2D) and VisPy (3D) renderers."""
 import numpy as np
+
 from had_env.config import Interval
 from .style import ScreenLength, ScreenWidth, ScreenHeight, SurfaceColor
 
 
+def _pygame():
+    try:
+        import pygame
+    except ImportError as exc:
+        raise ImportError('2D rendering requires pygame: pip install -e ".[render]"') from exc
+    return pygame
+
+
+def entity_labels(simulation):
+    """API-consistent short labels: red_0 -> R0, blue_0 -> B0, target_0 -> T0."""
+    labels = {}
+    for prefix, group in (('R', simulation.red_agents), ('B', simulation.blue_agents), ('T', simulation.targets)):
+        labels.update({entity.Id: f'{prefix}{index}' for index, entity in enumerate(group)})
+    return labels
+
+
 def render_information(simulation):
+    """Targets, Red and Blue rows with positions normalized to the world box."""
     bounds = np.asarray(simulation.world_bounds, float)
     span = bounds[:, 1] - bounds[:, 0]
+    labels = entity_labels(simulation)
+
     def row(entity, aircraft=False):
-        normalized = np.divide(np.asarray(entity.position)-bounds[:, 0], span,
-                               out=np.full(3, .5), where=span > 0)
-        result = dict(position=np.clip(normalized, 0., 1.).tolist(), id=entity.Id,
+        normalized = np.divide(np.asarray(entity.position)-bounds[:, 0], span, out=np.full(3, .5), where=span > 0)
+        result = dict(position=np.clip(normalized, 0., 1.).tolist(), id=entity.Id, label=labels[entity.Id],
                       health=float(entity.Health), max_health=float(entity.initial_health),
                       alive=bool(entity.Health > 0))
         if aircraft:
             attitude = getattr(entity, 'attitude', None)
-            result.update(velocity=list(entity.velocity), type=entity.Type,
+            result.update(velocity=list(entity.velocity), type=entity.Type, team=entity.Color,
                           env_agent_type=simulation.env_agent_type,
                           attitude=None if attitude is None else np.asarray(attitude).tolist())
         return result
@@ -25,20 +44,21 @@ def render_information(simulation):
 
 
 def render_metadata(simulation):
+    labels = entity_labels(simulation)
     return dict(step=simulation.physics_step_count, sim_time=simulation.physics_step_count * Interval,
-        task_mode=simulation.task_mode, env_agent_type=simulation.env_agent_type,
-        world_bounds=simulation.world_bounds.tolist(),
-        live_counts={'red': sum(a.Health > 0 for a in simulation.red_agents),
-                     'blue': sum(a.Health > 0 for a in simulation.blue_agents)},
-        targets=[dict(id=t.Id, health=float(t.Health), max_health=float(t.initial_health))
-                 for t in simulation.targets],
-        step_target_damage=simulation.step_target_damage, target_damage=simulation.target_damage)
+                task_mode=simulation.task_mode, env_agent_type=simulation.env_agent_type,
+                world_bounds=simulation.world_bounds.tolist(), fire_range=float(simulation.fire_range),
+                live_counts={'red': sum(a.Health > 0 for a in simulation.red_agents),
+                             'blue': sum(a.Health > 0 for a in simulation.blue_agents)},
+                targets=[dict(id=t.Id, label=labels[t.Id], health=float(t.Health), max_health=float(t.initial_health))
+                         for t in simulation.targets],
+                step_target_damage=simulation.step_target_damage, target_damage=simulation.target_damage)
 
 
 def render_rgb_array(simulation, include_result=True):
     if simulation._view_mode == '3d':
         return _scene3d(simulation).render_rgb_array()
-    import pygame
+    pygame = _pygame()
     from .render import DisplayPlayer
     if not pygame.font.get_init():
         pygame.font.init()
@@ -57,12 +77,13 @@ def render(simulation):
             simulation.close()
             return False
         return True
-    import pygame
+    pygame = _pygame()
     from .render import DisplayPlayer
     if simulation._display_player is None or not pygame.display.get_init():
         pygame.display.init()
         if not pygame.font.get_init():
             pygame.font.init()
+        pygame.display.set_caption('SkyHAD')
         simulation._display_player = DisplayPlayer(pygame.display.set_mode((ScreenLength, ScreenWidth + ScreenHeight)))
     player = simulation._display_player
     player.screen.fill(SurfaceColor)

@@ -1,4 +1,4 @@
-# SkyHAD v4 mathematical model
+# SkyHAD mathematical model
 
 The [36-page formulation](PROBLEM_FORMULATION.pdf) and its [editable LaTeX source](PROBLEM_FORMULATION.tex) give sixteen defender-centric problem formulations. There are four shared-formulation pages and two pages for each model/control/task combination. The PDF uses IEEE journal layout with a 10pt normal body. Each theme has one section number and continuous subsections across two pages, connecting its physical model and action interface to defender observations, task return and policy objective. Shared formulas are referenced where needed. This document explains the shared assumptions, implementation correspondence and learning semantics. Public calls and tensor contracts are documented in [API.md](API.md).
 
@@ -77,9 +77,9 @@ Dead blocks are zero. Particle state has length \(11M\), omitting the clock and 
 
 ## Geometry and reset distribution
 
-Scene scales are \(\lambda=1,.4,.16\) for particle, fixed wing and quadrotor. Default bounds are \(\lambda([-2500,2500]^2\times[0,2500])\) metres. Assets are independent uniform samples from \(\lambda([-2300,-1900]\times[-1200,1200]\times[500,1500])\), or a supplied fixed layout. Red samples a target uniformly and an area-uniform XY annulus with radii \([800,2200]\lambda\); 3D XY coordinates are clipped to bounds. Blue samples x from \([0,2500]\lambda\) and y across the scene. UAV altitude is uniform on \([200,1500]\lambda\), clipped to the height bounds.
+Scene scales are \(\lambda=1,.4,.16\) for particle, fixed wing and quadrotor. Default bounds are \(\lambda([-2500,2500]^2\times[0,2500])\) metres. Assets are independent uniform samples from \(\lambda([-2300,-1900]\times[-1200,1200]\times[500,1500])\), or a supplied fixed layout. Red samples a target uniformly and an area-uniform XY annulus with radii \([800,2200]\lambda\); draws outside the world are rejected and resampled. Blue samples x from \([0,2500]\lambda\) and y across the scene. UAV altitude is uniform on \([200,1500]\lambda\), clipped to the height bounds.
 
-Particle velocity has a Gaussian unit direction and speed \(\|(u_1,u_2,u_3)\|/\sqrt3\), with independent \(u_a\sim U(35,120)\). Fixed-wing random resets use solved 30 m/s level flight, east for Red and west for Blue. Quadrotors reset at rest with identity quaternion and zero body rate. UAV and planar resets reject openings within \(\max(30\lambda,20\lambda+10^{-6})\) of already placed entities, including targets; ordinary 3D particles do not apply this rejection. Subsequent collisions remain possible. Uniform initialization is a separate display/experiment layout.
+Particle velocity has a Gaussian unit direction and speed \(\|(u_1,u_2,u_3)\|/\sqrt3\), with independent \(u_a\sim U(35,120)\). Fixed-wing random resets use solved 30 m/s level flight, east for Red and west for Blue. Quadrotors reset at rest with identity quaternion and zero body rate. Every reset resamples aircraft openings within \(\max(30\lambda,20\lambda+10^{-6})\) of already placed entities, including targets. Subsequent collisions remain possible. Uniform initialization is a separate display/experiment layout.
 
 Native seedless resets advance the instance RNG. The grouping environment instead retains its saved seed and reproduces that seeded initialization when reset without a new seed.
 
@@ -143,7 +143,7 @@ FRD body airflow is \((u,v_b,w)=C_fR^Tv\), with \(V=\|(u,v_b,w)\|\), \(\alpha=\m
 
 Direct actions are `[elevator,aileron,rudder,throttle]` in \([-1,1]^4\), with surfaces \(25^\circ a_{1:3}\), throttle \((a_4+1)/2\). Zero input is half throttle with neutral surfaces, not trim. Trim solves all three translational and three rotational equilibrium equations, including propeller reaction torque; the six unknowns are pitch, heading, three surfaces and throttle. Reset uses the 30 m/s solution rotated to the requested heading.
 
-Acceleration intent is \(5a\) m/s². Position guidance commands course toward the target and flight path \(\mathrm{atan2}(d_z,\max(\|d_{xy}\|,30))\) at 30 m/s. Reference speed is limited to 18-30 m/s, bank/pitch/path to 45/20/15 degrees. The controller schedules the complete feasible trim with requested speed, then applies course-to-bank, pitch, sideslip/rate and speed feedback. The PDF states the exact gains and signs. These gains and bounds are project choices, not the full BYU autopilot. The aircraft flies toward and through a point and cannot hover there.
+Acceleration intent is \(5a\) m/s². Position guidance commands course toward the target and flight path \(\mathrm{atan2}(d_z,\max(\|d_{xy}\|,30))\) at 30 m/s. Reference speed is limited to 18-30 m/s, bank/pitch/path to 45/20/15 degrees. The controller schedules the complete feasible trim with requested speed (linear interpolation between exact trim solutions every 0.25 m/s), then applies course-to-bank, pitch, sideslip/yaw-rate and speed feedback. Because \(C_{n\delta_r}<0\), the rudder law \(\delta_r=\delta_r^*-0.8(\beta-\beta^*)+0.1(r-r_d)\) opposes sideslip; during a sustained 120° turn the sideslip stays below 1°. The PDF states every gain and sign. These gains and bounds are project choices, not the full BYU autopilot. The aircraft flies toward and through a point and cannot hover there.
 
 ### Quadrotor
 
@@ -193,12 +193,12 @@ Disturb uses a forward sector of radius \(600\lambda\) and half-angle \(\pi/6\),
 
 \[
 G_{ji}=\mathbf1_{10^{-3}<d_{ji}<600\lambda,\;\theta_{ji}<\pi/6}
-\exp[-(d_{ji}/\lambda)^2/2]/\sqrt{2\pi}.
+\exp[-(d_{ji}/600\lambda)^2/2]/\sqrt{2\pi}.
 \]
 
-The angle is zero when either direction norm is below \(10^{-3}\). Let \(S_c(j)\) sum \(G_{ji}\) over living UAVs of side c. Red Disturb activates if \(S_R<S_B\); Blue if \(S_R\ge S_B\). Disturb damage is \(.1\sum_jJ_jG_{ji}\) and affects either team's UAVs, never assets. Scout has radius \(2000\lambda\), half-angle \(\pi/3\); its functional sector does not filter native actor observations.
+The angle is zero when either direction norm is below \(10^{-3}\). Let \(S_c(j)\) sum \(G_{ji}\) over living UAVs of side c. Red Disturb activates if \(S_R<S_B\); Blue if \(S_R\ge S_B\). Disturb damage is \(.1\sum_jJ_jG_{ji}\) and affects either team's UAVs, never assets. Distance is measured in sector radii, so one active disturber removes 0.024–0.040 HP per second from every UAV inside its sector. Scout has radius \(2000\lambda\), half-angle \(\pi/3\); its functional sector does not filter native actor observations.
 
-Detailed attack events label damage `source_unclipped` and `simultaneous=True`. These contributions are not sequential health decrements; simultaneous overkill remains in raw damage. Disabling event recording does not disable damage accounting. Replay position interpolation does not change the physical state, clock or score.
+Detailed attack events label damage `source_unclipped` and `simultaneous=True`. These contributions are not sequential health decrements; simultaneous overkill remains in raw damage. Disabling event recording does not disable damage accounting.
 
 ## Survival and Damage tasks
 
@@ -234,7 +234,7 @@ Current grouping Damage reward is the undiscounted sum, directly matching \(\gam
 
 ## Implementation correspondence and editing
 
-The v4 public simulation is `env.simulation`, and `Simulation.entities` owns the stable entity sequence. The relevant flat package modules are:
+The public simulation is `env.simulation`, and `Simulation.entities` owns the stable entity sequence. The relevant flat package modules are:
 
 | Concern | Source |
 | --- | --- |
@@ -249,6 +249,6 @@ The v4 public simulation is `env.simulation`, and `Simulation.entities` owns the
 | Task rewards and completion | [had_env/tasks.py](../had_env/tasks.py) |
 | Grouping and opponent laws | [had_env/grouping](../had_env/grouping) |
 
-The source is authoritative where a mathematical abbreviation omits an implementation detail. The reference article supplied for this documentation was used only for the scenario/dynamics/game structure; its alternative particle position and health equations were not copied. The PDF uses native v4 semantics and does not describe removed algorithm adapters.
+The source is authoritative where a mathematical abbreviation omits an implementation detail.
 
-To rebuild, run `tectonic --keep-logs --outdir <external-build-directory> docs/PROBLEM_FORMULATION.tex`, inspect all rendered pages, then copy the resulting PDF into `docs/PROBLEM_FORMULATION.pdf`. Keep build auxiliaries and the local reference article outside the deliverable directory.
+To rebuild the PDF, run `tectonic --keep-logs --outdir <build-directory> docs/PROBLEM_FORMULATION.tex` and copy the result to `docs/PROBLEM_FORMULATION.pdf`.

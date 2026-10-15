@@ -10,7 +10,6 @@ from had_env.config import (
     reward_episode,
     reward_scout_single,
 )
-from had_env._rendering import has_native_renderer, has_3d_renderer, native_backend
 from had_env.world import World
 from had_env.initialization import reset_random, reset_uniform
 from had_env.observations import observations, alive_entities, global_state
@@ -98,12 +97,13 @@ class Simulation(World):
         self.task_type = task_type
 
     def reset(self, evaluate=False, seed=None):
+        """Start an episode; ``evaluate`` is accepted for compatibility and does not change sampling."""
         if seed is not None:
             self.np_random = np.random.default_rng(seed)
         if self.task_type == 'Normal Showcase':
             reset_uniform(self)
         else:
-            reset_random(self, evaluate=evaluate)
+            reset_random(self)
 
         observation_n = self.get_observation(is_relative_observation=True)
         world_alive = self.get_world_alive()
@@ -201,34 +201,35 @@ class Simulation(World):
         return task_info(self)
 
     def _render_information(self):
-        return native_backend().render_information(self)
+        from had_env.render import backend
+        return backend.render_information(self)
 
     def _render_metadata(self):
-        return native_backend().render_metadata(self)
+        from had_env.render import backend
+        return backend.render_metadata(self)
 
     def render_rgb_array(self, include_result=True):
-        """Return the selected view without changing physical state."""
-        return native_backend().render_rgb_array(self, include_result)
+        """Return the selected view as an RGB array without changing physical state."""
+        from had_env.render import backend
+        return backend.render_rgb_array(self, include_result)
 
     def set_view_mode(self, mode):
-        """Select basic 2D projections or the full edition's UAV 3D scene."""
+        """Select the 2D XY/XZ projections or the 3D scene (UAV models only)."""
         if mode not in ('projections', '3d'):
             raise ValueError("view mode must be 'projections' or '3d'")
-        if mode == '3d':
-            if self.env_agent_type not in ('UAV_fixedwing', 'UAV_quadrotor'):
-                raise ValueError('3D rendering is supported for UAV_fixedwing and UAV_quadrotor.')
-            if not has_3d_renderer():
-                raise ValueError('3D rendering requires the full edition on the main branch; core retains basic 2D rendering.')
+        if mode == '3d' and self.env_agent_type not in ('UAV_fixedwing', 'UAV_quadrotor'):
+            raise ValueError('3D rendering is supported for UAV_fixedwing and UAV_quadrotor.')
         if mode != self._view_mode:
             self.close()
             self._view_mode = mode
             self._render_closed = False
 
     def render(self):
-        """Return False when rendering is unavailable or the window is closed."""
-        if self._render_closed or not has_native_renderer():
+        """Draw the current state in a window; return False once the window is closed."""
+        if self._render_closed:
             return False
-        return native_backend().render(self)
+        from had_env.render import backend
+        return backend.render(self)
 
     def close(self):
         """Release this environment's render resources without ending Python."""
